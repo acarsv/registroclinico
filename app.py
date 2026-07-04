@@ -89,11 +89,39 @@ def insert_row(table: str, payload: dict[str, Any]) -> None:
     st.success("Registro salvo.")
 
 
+MIN_CLINICAL_DATE = date(1900, 1, 1)
+MAX_CLINICAL_DATE = date(2100, 12, 31)
+
+
 def optional_date_input(label: str, key: str, container: Any = st) -> date | None:
     has_date = container.checkbox(f"Informar {label.lower()}", key=f"{key}_enabled")
     if not has_date:
         return None
-    return container.date_input(label, value=date.today(), key=key)
+    return container.date_input(
+        label,
+        value=date.today(),
+        min_value=MIN_CLINICAL_DATE,
+        max_value=MAX_CLINICAL_DATE,
+        key=key,
+    )
+
+
+def birth_date_input(container: Any = st) -> date | None:
+    has_date = container.checkbox("Informar data de nascimento", key="patient_birth_date_enabled")
+    if not has_date:
+        return None
+    value = container.text_input("Data de nascimento", value="", placeholder="DD/MM/AAAA")
+    if not value.strip():
+        return None
+    try:
+        parsed = datetime.strptime(value.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        container.error("Use o formato DD/MM/AAAA. Exemplo: 15/08/1957.")
+        return None
+    if parsed < MIN_CLINICAL_DATE or parsed > date.today():
+        container.error("Informe uma data entre 01/01/1900 e hoje.")
+        return None
+    return parsed
 
 
 def optional_number_input(label: str, key: str, container: Any = st) -> float | None:
@@ -187,7 +215,7 @@ def patient_form() -> None:
         st.subheader("Novo paciente")
         c1, c2, c3 = st.columns(3)
         full_name = c1.text_input("Nome completo")
-        birth_date = optional_date_input("Data de nascimento", "patient_birth_date", c2)
+        birth_date = birth_date_input(c2)
         sex = c3.selectbox("Sexo", ["Nao informado", "Feminino", "Masculino", "Outro"])
         c4, c5, c6 = st.columns(3)
         phone = c4.text_input("Telefone")
@@ -304,7 +332,12 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
         patient_id = patients[st.selectbox("Paciente", list(patients), key="exam_patient")]
         exam_type = st.text_input("Tipo de exame")
         c1, c2, c3 = st.columns(3)
-        exam_date = c1.date_input("Data do exame", value=date.today())
+        exam_date = c1.date_input(
+            "Data do exame",
+            value=date.today(),
+            min_value=MIN_CLINICAL_DATE,
+            max_value=MAX_CLINICAL_DATE,
+        )
         numeric_value = optional_number_input("Valor numerico", "exam_numeric_value", c2)
         unit = c3.text_input("Unidade")
         reference_range = st.text_input("Valor de referencia")
@@ -332,7 +365,12 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
         patient_id = patients[st.selectbox("Paciente", list(patients), key="visit_patient")]
         doctor_name = st.selectbox("Medico", [""] + list(doctors), key="visit_doctor")
         doctor_id = doctors.get(doctor_name)
-        visit_date = st.date_input("Data da consulta", value=date.today())
+        visit_date = st.date_input(
+            "Data da consulta",
+            value=date.today(),
+            min_value=MIN_CLINICAL_DATE,
+            max_value=MAX_CLINICAL_DATE,
+        )
         reason = st.text_area("Motivo")
         diagnosis = st.text_area("Diagnostico/hipotese")
         plan = st.text_area("Conduta/plano")
