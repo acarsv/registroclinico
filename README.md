@@ -62,6 +62,7 @@ Para habilitar a importacao da planilha `RegistroClinico.xlsx` em um banco que j
 
 ```text
 supabase/migrations/20260704152000_excel_import_support.sql
+supabase/migrations/20260704160000_doencas_table.sql
 ```
 
 Opcao com Supabase CLI:
@@ -94,6 +95,7 @@ A tela `Importar Excel` aceita a planilha `RegistroClinico.xlsx` e distribui os 
 - `visits`: consultas, sintomas, diagnosticos, tratamento e imagens.
 - `exams`: resultados laboratoriais com grupo, unidade, valor e status.
 - `vaccines`: vacinas.
+- `doencas`: cadastro de doencas com CID, nome da doenca e descricao.
 - `medication_catalog`, `exam_groups`, `exam_catalog`, `cid_codes`, `disease_categories`, `symptoms_catalog`: tabelas de referencia.
 
 A importacao usa chaves unicas e `upsert`, entao pode ser reexecutada para corrigir dados sem duplicar os principais registros.

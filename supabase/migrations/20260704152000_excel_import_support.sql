@@ -69,6 +69,14 @@ create table if not exists cid_codes (
   created_at timestamptz not null default now()
 );
 
+create table if not exists doencas (
+  id uuid primary key default gen_random_uuid(),
+  cid text not null unique,
+  doenca text,
+  descricao text,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists disease_categories (
   cid text primary key,
   disease_group text,
@@ -103,6 +111,7 @@ alter table medication_catalog enable row level security;
 alter table exam_groups enable row level security;
 alter table exam_catalog enable row level security;
 alter table cid_codes enable row level security;
+alter table doencas enable row level security;
 alter table disease_categories enable row level security;
 alter table symptoms_catalog enable row level security;
 alter table vaccines enable row level security;
@@ -117,6 +126,7 @@ begin
     'exam_groups',
     'exam_catalog',
     'cid_codes',
+    'doencas',
     'disease_categories',
     'symptoms_catalog',
     'vaccines'

@@ -58,6 +58,7 @@ TABLES = [
     "exam_groups",
     "exam_catalog",
     "cid_codes",
+    "doencas",
     "disease_categories",
     "symptoms_catalog",
     "import_batches",
@@ -650,10 +651,12 @@ def fetch_id_map(table: str, label_col: str = "full_name") -> dict[str, str]:
     }
 
 
-def read_sheet(xl: pd.ExcelFile, sheet: str) -> pd.DataFrame:
-    if sheet not in xl.sheet_names:
+def read_sheet(xl: pd.ExcelFile, sheet: str | list[str]) -> pd.DataFrame:
+    sheet_options = [sheet] if isinstance(sheet, str) else sheet
+    selected = next((option for option in sheet_options if option in xl.sheet_names), None)
+    if selected is None:
         return pd.DataFrame()
-    return pd.read_excel(xl, sheet_name=sheet)
+    return pd.read_excel(xl, sheet_name=selected)
 
 
 def import_patients(xl: pd.ExcelFile) -> int:
@@ -788,12 +791,30 @@ def import_reference_tables(xl: pd.ExcelFile) -> dict[str, int]:
                 }
             )
     counts["cid_codes"] = upsert_rows("cid_codes", cid_rows, "code")
+    cid_descriptions = {row["code"]: row["description"] for row in cid_rows}
 
     diseases = read_sheet(xl, "DoençasTab")
+    if diseases.empty:
+        diseases = read_sheet(xl, ["Doen\u00e7asTab", "DoencasTab"])
+    doenca_rows = []
     disease_rows = []
     for _, item in diseases.iterrows():
         code = clean_text(item.get("CID"))
+        disease_name = clean_text(item.get("NomeDoen\u00e7a")) or clean_text(item.get("NomeDoen\u00c3\u00a7a"))
+        description = (
+            clean_text(item.get("Descri\u00e7\u00e3o"))
+            or clean_text(item.get("Descricao"))
+            or clean_text(item.get("DESCRICAO"))
+            or cid_descriptions.get(code or "")
+        )
         if code:
+            doenca_rows.append(
+                {
+                    "cid": code,
+                    "doenca": disease_name,
+                    "descricao": description,
+                }
+            )
             disease_rows.append(
                 {
                     "cid": code,
@@ -801,6 +822,7 @@ def import_reference_tables(xl: pd.ExcelFile) -> dict[str, int]:
                     "disease_name": clean_text(item.get("NomeDoença")),
                 }
             )
+    counts["doencas"] = upsert_rows("doencas", doenca_rows, "cid")
     counts["disease_categories"] = upsert_rows("disease_categories", disease_rows, "cid")
 
     symptoms = read_sheet(xl, "SintomaTab")
@@ -920,13 +942,15 @@ def import_schema_status() -> tuple[bool, str]:
         client.table("patients").select("id,address,health_plan,preexisting_conditions").limit(1).execute()
         client.table("vaccines").select("id,source_key").limit(1).execute()
         client.table("exam_catalog").select("id,name").limit(1).execute()
+        client.table("doencas").select("id,cid,doenca,descricao").limit(1).execute()
         client.table("import_batches").select("id,file_name").limit(1).execute()
         return True, "Schema de importacao pronto."
     except Exception as exc:
         return (
             False,
             "O banco ainda nao tem as colunas/tabelas de importacao. "
-            "Execute `supabase/migrations/20260704152000_excel_import_support.sql` "
+            "Execute `supabase/migrations/20260704152000_excel_import_support.sql` e "
+            "`supabase/migrations/20260704160000_doencas_table.sql` "
             "no SQL Editor do Supabase e depois reinicie o app. "
             f"Detalhe tecnico: {exc}",
         )
@@ -971,16 +995,19 @@ def import_excel_view() -> None:
 
     st.markdown("**Destino dos dados**")
     st.write(
-        "Pacientes, medicos, consultas, vacinas, resultados de exames e tabelas de referencia "
+        "Pacientes, medicos, consultas, vacinas, resultados de exames, doencas e tabelas de referencia "
         "serao importados com atualizacao por chave unica para reduzir duplicidade."
     )
 
     schema_ok, schema_message = import_schema_status()
     if not schema_ok:
         st.error(schema_message)
-        st.markdown("Execute esta migration no **SQL Editor** do Supabase:")
+        st.markdown("Execute estas migrations no **SQL Editor** do Supabase:")
         st.code("supabase/migrations/20260704152000_excel_import_support.sql", language="text")
         with open("supabase/migrations/20260704152000_excel_import_support.sql", encoding="utf-8") as migration:
+            st.code(migration.read(), language="sql")
+        st.code("supabase/migrations/20260704160000_doencas_table.sql", language="text")
+        with open("supabase/migrations/20260704160000_doencas_table.sql", encoding="utf-8") as migration:
             st.code(migration.read(), language="sql")
         return
 
@@ -998,6 +1025,23 @@ def raw_tables(data: dict[str, pd.DataFrame]) -> None:
     st.dataframe(data[table], use_container_width=True, hide_index=True)
 
 
+def diseases_view(data: dict[str, pd.DataFrame]) -> None:
+    st.subheader("Doencas")
+    diseases = data["doencas"].copy()
+    if diseases.empty:
+        st.info("Importe a planilha Excel para preencher o cadastro de doencas.")
+        return
+
+    search = st.text_input("Buscar por CID, doenca ou descricao")
+    if search.strip():
+        query = search.strip().casefold()
+        searchable = diseases[["cid", "doenca", "descricao"]].fillna("").astype(str)
+        mask = searchable.apply(lambda col: col.str.casefold().str.contains(query, regex=False)).any(axis=1)
+        diseases = diseases[mask]
+
+    st.dataframe(diseases, use_container_width=True, hide_index=True)
+
+
 def main() -> None:
     st.title("Registro Clinico")
     setup_warning()
@@ -1009,6 +1053,7 @@ def main() -> None:
             "Dashboard",
             "Pacientes",
             "Medicos",
+            "Doencas",
             "Historico clinico",
             "Historico por paciente",
             "Importar Excel",
@@ -1029,6 +1074,8 @@ def main() -> None:
     elif page == "Medicos":
         doctor_form()
         st.dataframe(data["doctors"], use_container_width=True, hide_index=True)
+    elif page == "Doencas":
+        diseases_view(data)
     elif page == "Historico clinico":
         clinical_forms(data)
     elif page == "Historico por paciente":
