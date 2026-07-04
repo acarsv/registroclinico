@@ -89,8 +89,43 @@ def insert_row(table: str, payload: dict[str, Any]) -> None:
     st.success("Registro salvo.")
 
 
+def update_row(table: str, row_id: str, payload: dict[str, Any]) -> None:
+    client = supabase_client()
+    if client is None:
+        st.error("Configure o Supabase em .streamlit/secrets.toml antes de salvar dados.")
+        return
+    clean = {
+        key: (value.isoformat() if isinstance(value, (date, datetime)) else value)
+        for key, value in payload.items()
+        if value is not None
+    }
+    client.table(table).update(clean).eq("id", row_id).execute()
+    st.cache_data.clear()
+    st.success("Paciente atualizado.")
+
+
 MIN_CLINICAL_DATE = date(1900, 1, 1)
 MAX_CLINICAL_DATE = date(2100, 12, 31)
+
+
+def parse_br_date(value: str, container: Any = st) -> date | None:
+    if not value.strip():
+        return None
+    try:
+        parsed = datetime.strptime(value.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        container.error("Use o formato DD/MM/AAAA. Exemplo: 15/08/1957.")
+        return None
+    if parsed < MIN_CLINICAL_DATE or parsed > date.today():
+        container.error("Informe uma data entre 01/01/1900 e hoje.")
+        return None
+    return parsed
+
+
+def format_br_date(value: Any) -> str:
+    if value in ("", None) or pd.isna(value):
+        return ""
+    return pd.to_datetime(value).date().strftime("%d/%m/%Y")
 
 
 def optional_date_input(label: str, key: str, container: Any = st) -> date | None:
@@ -111,17 +146,7 @@ def birth_date_input(container: Any = st) -> date | None:
     if not has_date:
         return None
     value = container.text_input("Data de nascimento", value="", placeholder="DD/MM/AAAA")
-    if not value.strip():
-        return None
-    try:
-        parsed = datetime.strptime(value.strip(), "%d/%m/%Y").date()
-    except ValueError:
-        container.error("Use o formato DD/MM/AAAA. Exemplo: 15/08/1957.")
-        return None
-    if parsed < MIN_CLINICAL_DATE or parsed > date.today():
-        container.error("Informe uma data entre 01/01/1900 e hoje.")
-        return None
-    return parsed
+    return parse_br_date(value, container)
 
 
 def optional_number_input(label: str, key: str, container: Any = st) -> float | None:
@@ -238,6 +263,58 @@ def patient_form() -> None:
                         "notes": notes,
                     },
                 )
+
+
+def patient_edit_form(patients: pd.DataFrame) -> None:
+    st.subheader("Editar paciente")
+    if patients.empty:
+        st.info("Cadastre um paciente antes de editar.")
+        return
+
+    options = patient_options(patients)
+    selected_name = st.selectbox("Paciente", list(options), key="edit_patient_select")
+    patient_id = options[selected_name]
+    patient = patients[patients["id"] == patient_id].iloc[0]
+
+    with st.form("patient_edit_form"):
+        c1, c2, c3 = st.columns(3)
+        full_name = c1.text_input("Nome completo", value=str(patient.get("full_name") or ""))
+        birth_date_text = c2.text_input(
+            "Data de nascimento",
+            value=format_br_date(patient.get("birth_date")),
+            placeholder="DD/MM/AAAA",
+            help="Deixe em branco para remover a data.",
+        )
+        sex_options = ["Nao informado", "Feminino", "Masculino", "Outro"]
+        current_sex = patient.get("sex") if patient.get("sex") in sex_options else "Nao informado"
+        sex = c3.selectbox("Sexo", sex_options, index=sex_options.index(current_sex))
+
+        c4, c5, c6 = st.columns(3)
+        phone = c4.text_input("Telefone", value=str(patient.get("phone") or ""))
+        email = c5.text_input("Email", value=str(patient.get("email") or ""))
+        city = c6.text_input("Cidade", value=str(patient.get("city") or ""))
+        notes = st.text_area("Observacoes", value=str(patient.get("notes") or ""))
+
+        if st.form_submit_button("Atualizar paciente", type="primary"):
+            if not full_name.strip():
+                st.error("Informe o nome do paciente.")
+                return
+            birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
+            if birth_date_text.strip() and birth_date is None:
+                return
+            update_row(
+                "patients",
+                patient_id,
+                {
+                    "full_name": full_name,
+                    "birth_date": birth_date,
+                    "sex": sex,
+                    "phone": phone,
+                    "email": email,
+                    "city": city,
+                    "notes": notes,
+                },
+            )
 
 
 def doctor_form() -> None:
@@ -490,7 +567,11 @@ def main() -> None:
     if page == "Dashboard":
         dashboard(data)
     elif page == "Pacientes":
-        patient_form()
+        new_tab, edit_tab = st.tabs(["Novo paciente", "Editar paciente"])
+        with new_tab:
+            patient_form()
+        with edit_tab:
+            patient_edit_form(data["patients"])
         st.dataframe(data["patients"], use_container_width=True, hide_index=True)
     elif page == "Medicos":
         doctor_form()
