@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
 from datetime import date, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +46,22 @@ if __name__ == "__main__" and not running_inside_streamlit():
 st.set_page_config(page_title="Registro Clinico", page_icon="RC", layout="wide")
 
 
-TABLES = ["patients", "doctors", "conditions", "medications", "exams", "visits"]
+TABLES = [
+    "patients",
+    "doctors",
+    "conditions",
+    "medications",
+    "exams",
+    "visits",
+    "vaccines",
+    "medication_catalog",
+    "exam_groups",
+    "exam_catalog",
+    "cid_codes",
+    "disease_categories",
+    "symptoms_catalog",
+    "import_batches",
+]
 
 
 def secret(path: str, default: str = "") -> str:
@@ -70,8 +88,11 @@ def fetch_table(table: str) -> pd.DataFrame:
     client = supabase_client()
     if client is None:
         return pd.DataFrame()
-    response = client.table(table).select("*").execute()
-    return pd.DataFrame(response.data or [])
+    try:
+        response = client.table(table).select("*").execute()
+        return pd.DataFrame(response.data or [])
+    except Exception:
+        return pd.DataFrame()
 
 
 def insert_row(table: str, payload: dict[str, Any]) -> None:
@@ -97,7 +118,6 @@ def update_row(table: str, row_id: str, payload: dict[str, Any]) -> None:
     clean = {
         key: (value.isoformat() if isinstance(value, (date, datetime)) else value)
         for key, value in payload.items()
-        if value is not None
     }
     client.table(table).update(clean).eq("id", row_id).execute()
     st.cache_data.clear()
@@ -324,9 +344,10 @@ def doctor_form() -> None:
         full_name = c1.text_input("Nome")
         specialty = c2.text_input("Especialidade")
         crm = c3.text_input("CRM")
-        c4, c5 = st.columns(2)
+        c4, c5, c6 = st.columns(3)
         phone = c4.text_input("Telefone")
         email = c5.text_input("Email")
+        location = c6.text_input("Local")
         if st.form_submit_button("Salvar medico", type="primary"):
             if not full_name.strip():
                 st.error("Informe o nome do medico.")
@@ -339,6 +360,7 @@ def doctor_form() -> None:
                         "crm": crm,
                         "phone": phone,
                         "email": email,
+                        "location": location,
                     },
                 )
 
@@ -549,6 +571,399 @@ def ai_view(data: dict[str, pd.DataFrame]) -> None:
             st.error(f"Nao foi possivel gerar a analise: {exc}")
 
 
+def clean_text(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none"}:
+        return None
+    return text
+
+
+def clean_number(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, str):
+        value = value.strip().replace(".", "").replace(",", ".") if "," in value else value.strip()
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_excel_date(value: Any, dayfirst: bool = True) -> date | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    match = re.search(r"\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}", text)
+    if match:
+        text = match.group(0)
+    parsed = pd.to_datetime(text, errors="coerce", dayfirst=dayfirst)
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
+
+
+def source_key(*parts: Any) -> str:
+    return "|".join(clean_text(part) or "" for part in parts)
+
+
+def clean_payload(row: dict[str, Any]) -> dict[str, Any]:
+    clean: dict[str, Any] = {}
+    for key, value in row.items():
+        if isinstance(value, (date, datetime)):
+            clean[key] = value.isoformat()
+        elif value is None or (not isinstance(value, list) and pd.isna(value)):
+            clean[key] = None
+        else:
+            clean[key] = value
+    return clean
+
+
+def upsert_rows(table: str, rows: list[dict[str, Any]], on_conflict: str, chunk_size: int = 500) -> int:
+    client = supabase_client()
+    if client is None or not rows:
+        return 0
+    cleaned = [clean_payload(row) for row in rows]
+    for index in range(0, len(cleaned), chunk_size):
+        client.table(table).upsert(cleaned[index : index + chunk_size], on_conflict=on_conflict).execute()
+    return len(cleaned)
+
+
+def fetch_id_map(table: str, label_col: str = "full_name") -> dict[str, str]:
+    client = supabase_client()
+    if client is None:
+        return {}
+    response = client.table(table).select(f"id,{label_col}").execute()
+    return {
+        str(row[label_col]): row["id"]
+        for row in response.data or []
+        if row.get(label_col) and row.get("id")
+    }
+
+
+def read_sheet(xl: pd.ExcelFile, sheet: str) -> pd.DataFrame:
+    if sheet not in xl.sheet_names:
+        return pd.DataFrame()
+    return pd.read_excel(xl, sheet_name=sheet)
+
+
+def import_patients(xl: pd.ExcelFile) -> int:
+    rows: dict[str, dict[str, Any]] = {}
+
+    cadastro = read_sheet(xl, "CadastroTab")
+    for _, item in cadastro.iterrows():
+        name = clean_text(item.get("Nome"))
+        if not name:
+            continue
+        rows[name] = {
+            "full_name": name,
+            "birth_date": parse_excel_date(item.get("Data Nascimento")),
+            "naturality": clean_text(item.get("Naturalidade")),
+            "cpf": clean_text(item.get("CPF")),
+            "address": clean_text(item.get("Endereço")),
+            "address_number": clean_text(item.get("Número")),
+            "address_complement": clean_text(item.get("Complemento")),
+            "city": clean_text(item.get("Cidade")),
+            "state": clean_text(item.get("Estado")),
+        }
+
+    pacientes = read_sheet(xl, "PacienteTab")
+    for _, item in pacientes.iterrows():
+        name = clean_text(item.get("Paciente"))
+        if not name:
+            continue
+        rows[name] = {
+            **rows.get(name, {}),
+            "full_name": name,
+            "birth_date": parse_excel_date(item.get("DataNasc")),
+            "naturality": clean_text(item.get("Naturalidade")),
+            "cpf": clean_text(item.get("CPF")),
+            "address": clean_text(item.get("Endereço")),
+            "address_complement": clean_text(item.get("Complemento")),
+            "neighborhood": clean_text(item.get("Bairro")),
+            "city": clean_text(item.get("Cidade")),
+            "state": clean_text(item.get("Estado")),
+            "phone": clean_text(item.get("Telefone")),
+            "health_plan": clean_text(item.get("Plano ")),
+            "registration_date": parse_excel_date(item.get("Data")),
+            "preexisting_conditions": clean_text(item.get("D. Preexistentes")),
+        }
+
+    return upsert_rows("patients", list(rows.values()), "full_name")
+
+
+def import_doctors(xl: pd.ExcelFile) -> int:
+    doctors = read_sheet(xl, "MedicoTab")
+    rows = []
+    for _, item in doctors.iterrows():
+        name = clean_text(item.get("Medico"))
+        if not name:
+            continue
+        rows.append(
+            {
+                "full_name": name,
+                "specialty": clean_text(item.get("Especialidade")),
+                "phone": clean_text(item.get("Telefone")),
+                "location": clean_text(item.get("Local")),
+            }
+        )
+
+    consultas = read_sheet(xl, "ConsultaTab")
+    existing = {row["full_name"] for row in rows}
+    for name in consultas.get("Medico", pd.Series(dtype=object)).dropna().unique():
+        doctor_name = clean_text(name)
+        if doctor_name and doctor_name not in existing:
+            rows.append({"full_name": doctor_name})
+            existing.add(doctor_name)
+    return upsert_rows("doctors", rows, "full_name")
+
+
+def import_reference_tables(xl: pd.ExcelFile) -> dict[str, int]:
+    counts: dict[str, int] = {}
+
+    meds = read_sheet(xl, "Medicamentos")
+    med_rows = []
+    for _, item in meds.iterrows():
+        name = clean_text(item.get("Nome"))
+        if name:
+            med_rows.append(
+                {
+                    "name": name,
+                    "indicated_for": clean_text(item.get("Indicado")),
+                    "generic_name": clean_text(item.get("Generico")),
+                    "image_url": clean_text(item.get("Imagem")),
+                }
+            )
+    counts["medication_catalog"] = upsert_rows("medication_catalog", med_rows, "name")
+
+    groups = read_sheet(xl, "GrupoTab")
+    group_rows = [{"name": clean_text(row.get("NomeGrupo"))} for _, row in groups.iterrows() if clean_text(row.get("NomeGrupo"))]
+
+    exam_tab = pd.read_excel(xl, sheet_name="ExameTab", header=None) if "ExameTab" in xl.sheet_names else pd.DataFrame()
+    for _, item in exam_tab.iterrows():
+        group_name = clean_text(item.get(4))
+        if group_name:
+            group_rows.append({"name": group_name})
+    group_rows = list({row["name"]: row for row in group_rows}.values())
+    counts["exam_groups"] = upsert_rows("exam_groups", group_rows, "name")
+
+    group_map = fetch_id_map("exam_groups", "name")
+    exam_rows = []
+    for _, item in exam_tab.iterrows():
+        name = clean_text(item.get(0))
+        group_name = clean_text(item.get(4))
+        if not name:
+            continue
+        exam_rows.append(
+            {
+                "name": name,
+                "group_id": group_map.get(group_name or ""),
+                "unit": clean_text(item.get(1)),
+                "reference_range": clean_text(item.get(2)),
+                "source_position": int(clean_number(item.get(5)) or 0) or None,
+            }
+        )
+    counts["exam_catalog"] = upsert_rows("exam_catalog", exam_rows, "name,group_id")
+
+    cid = read_sheet(xl, "CIDTab")
+    cid_rows = []
+    for _, item in cid.iterrows():
+        code = clean_text(item.get("SUBCAT"))
+        description = clean_text(item.get("DESCRICAO"))
+        if code and description:
+            cid_rows.append(
+                {
+                    "code": code,
+                    "description": description,
+                    "abbreviated_description": clean_text(item.get("DESCRABREV")),
+                }
+            )
+    counts["cid_codes"] = upsert_rows("cid_codes", cid_rows, "code")
+
+    diseases = read_sheet(xl, "DoençasTab")
+    disease_rows = []
+    for _, item in diseases.iterrows():
+        code = clean_text(item.get("CID"))
+        if code:
+            disease_rows.append(
+                {
+                    "cid": code,
+                    "disease_group": clean_text(item.get("GrupoDoença")),
+                    "disease_name": clean_text(item.get("NomeDoença")),
+                }
+            )
+    counts["disease_categories"] = upsert_rows("disease_categories", disease_rows, "cid")
+
+    symptoms = read_sheet(xl, "SintomaTab")
+    symptom_rows = []
+    for _, item in symptoms.iterrows():
+        name = clean_text(item.get("Sintoma"))
+        if name:
+            symptom_rows.append(
+                {
+                    "name": name,
+                    "description": clean_text(item.get("Descricao")),
+                    "english_name": clean_text(item.get("Synptoms")),
+                }
+            )
+    counts["symptoms_catalog"] = upsert_rows("symptoms_catalog", symptom_rows, "name")
+
+    return counts
+
+
+def import_visits(xl: pd.ExcelFile, patient_map: dict[str, str], doctor_map: dict[str, str]) -> int:
+    consultas = read_sheet(xl, "ConsultaTab")
+    rows = []
+    for _, item in consultas.iterrows():
+        patient_name = clean_text(item.get("Paciente"))
+        visit_date = parse_excel_date(item.get("DataConsulta"))
+        if not patient_name or not visit_date or patient_name not in patient_map:
+            continue
+        doctor_name = clean_text(item.get("Medico"))
+        meds = [clean_text(item.get(col)) for col in ["Medicamentos", "Medicamentos1", "Medicamentos2"]]
+        rows.append(
+            {
+                "patient_id": patient_map[patient_name],
+                "doctor_id": doctor_map.get(doctor_name or ""),
+                "visit_date": visit_date,
+                "source_num": int(clean_number(item.get("NumConsulta")) or 0) or None,
+                "source_key": source_key(patient_name, visit_date, item.get("NumConsulta"), doctor_name, item.get("Sintoma")),
+                "reason": clean_text(item.get("Sintoma")),
+                "symptom": clean_text(item.get("Sintoma")),
+                "diagnosis": clean_text(item.get("Diagnostico")),
+                "medications_text": "; ".join([med for med in meds if med]),
+                "plan": clean_text(item.get("Tratamento")),
+                "analysis": clean_text(item.get("Analise")),
+                "image_url": clean_text(item.get("Imagem")),
+                "image_url_2": clean_text(item.get("Imagem1")),
+            }
+        )
+    return upsert_rows("visits", rows, "source_key")
+
+
+def import_vaccines(xl: pd.ExcelFile, patient_map: dict[str, str]) -> int:
+    vacinas = read_sheet(xl, "Vacinas")
+    rows = []
+    for _, item in vacinas.iterrows():
+        patient_name = clean_text(item.get("Paciente"))
+        vaccine_name = clean_text(item.get("Nome da Vacina"))
+        vaccine_date = parse_excel_date(item.get("Data da Vacina"))
+        if not patient_name or not vaccine_name:
+            continue
+        rows.append(
+            {
+                "patient_id": patient_map.get(patient_name),
+                "vaccine_name": vaccine_name,
+                "lot": clean_text(item.get("Lote ")),
+                "expiration": clean_text(item.get("Validade")),
+                "vaccine_date": vaccine_date,
+                "location": clean_text(item.get("Local")),
+                "city": clean_text(item.get("Cidade")),
+                "state": clean_text(item.get("Estado")),
+                "source_key": source_key(patient_name, vaccine_name, vaccine_date, item.get("Lote ")),
+            }
+        )
+    return upsert_rows("vaccines", rows, "source_key")
+
+
+def import_exam_results(xl: pd.ExcelFile, patient_map: dict[str, str]) -> int:
+    registros = read_sheet(xl, "RegistroClinico")
+    rows = []
+    for index, item in registros.iterrows():
+        patient_name = clean_text(item.get("Paciente"))
+        exam_name = clean_text(item.get("NomeExame"))
+        if not patient_name or not exam_name or patient_name not in patient_map:
+            continue
+        exam_date = parse_excel_date(item.get("DataConsulta"), dayfirst=True)
+        numeric_value = clean_number(item.get("Valor"))
+        raw_value = clean_text(item.get("Valor"))
+        rows.append(
+            {
+                "patient_id": patient_map[patient_name],
+                "exam_type": exam_name,
+                "exam_group": clean_text(item.get("NomeGrupo")),
+                "exam_date": exam_date or date.today(),
+                "numeric_value": numeric_value,
+                "unit": clean_text(item.get("Unidade")),
+                "result_text": None if numeric_value is not None else raw_value,
+                "status_color": clean_text(item.get("Obs")),
+                "source_position": clean_number(item.get("Pos")),
+                "source_key": clean_text(item.get("RegistroKey")) or source_key(patient_name, exam_date, exam_name, index),
+            }
+        )
+    return upsert_rows("exams", rows, "source_key")
+
+
+def workbook_summary(file_bytes: bytes) -> pd.DataFrame:
+    xl = pd.ExcelFile(BytesIO(file_bytes))
+    rows = []
+    for sheet in xl.sheet_names:
+        df = pd.read_excel(xl, sheet_name=sheet)
+        rows.append({"aba": sheet, "linhas": len(df), "colunas": len(df.columns)})
+    return pd.DataFrame(rows)
+
+
+def import_workbook(file_name: str, file_bytes: bytes) -> dict[str, int]:
+    xl = pd.ExcelFile(BytesIO(file_bytes))
+    counts: dict[str, int] = {}
+    counts["patients"] = import_patients(xl)
+    counts["doctors"] = import_doctors(xl)
+    counts.update(import_reference_tables(xl))
+
+    patient_map = fetch_id_map("patients", "full_name")
+    doctor_map = fetch_id_map("doctors", "full_name")
+    counts["visits"] = import_visits(xl, patient_map, doctor_map)
+    counts["vaccines"] = import_vaccines(xl, patient_map)
+    counts["exams"] = import_exam_results(xl, patient_map)
+
+    client = supabase_client()
+    if client is not None:
+        client.table("import_batches").insert(
+            {"file_name": file_name, "summary": json.loads(json.dumps(counts))}
+        ).execute()
+    st.cache_data.clear()
+    return counts
+
+
+def import_excel_view() -> None:
+    st.subheader("Importar planilha Excel")
+    if supabase_client() is None:
+        st.warning("Configure o Supabase antes de importar.")
+        return
+
+    uploaded = st.file_uploader("Planilha RegistroClinico.xlsx", type=["xlsx"])
+    if uploaded is None:
+        st.info("Envie a planilha para validar abas e importar dados.")
+        return
+
+    file_bytes = uploaded.getvalue()
+    st.markdown("**Previa da planilha**")
+    st.dataframe(workbook_summary(file_bytes), use_container_width=True, hide_index=True)
+
+    st.markdown("**Destino dos dados**")
+    st.write(
+        "Pacientes, medicos, consultas, vacinas, resultados de exames e tabelas de referencia "
+        "serao importados com atualizacao por chave unica para reduzir duplicidade."
+    )
+
+    if st.button("Importar para Supabase", type="primary"):
+        try:
+            counts = import_workbook(uploaded.name, file_bytes)
+            st.success("Importacao concluida.")
+            st.json(counts)
+        except Exception as exc:
+            st.error(f"Falha na importacao: {exc}")
+
+
 def raw_tables(data: dict[str, pd.DataFrame]) -> None:
     table = st.selectbox("Tabela", TABLES)
     st.dataframe(data[table], use_container_width=True, hide_index=True)
@@ -561,7 +976,16 @@ def main() -> None:
 
     page = st.sidebar.radio(
         "Navegacao",
-        ["Dashboard", "Pacientes", "Medicos", "Historico clinico", "Historico por paciente", "IA", "Tabelas"],
+        [
+            "Dashboard",
+            "Pacientes",
+            "Medicos",
+            "Historico clinico",
+            "Historico por paciente",
+            "Importar Excel",
+            "IA",
+            "Tabelas",
+        ],
     )
 
     if page == "Dashboard":
@@ -580,6 +1004,8 @@ def main() -> None:
         clinical_forms(data)
     elif page == "Historico por paciente":
         history_view(data)
+    elif page == "Importar Excel":
+        import_excel_view()
     elif page == "IA":
         ai_view(data)
     else:

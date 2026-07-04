@@ -58,6 +58,12 @@ Opcao rapida:
 2. Cole o conteudo de `database/schema.sql`.
 3. Execute o script.
 
+Para habilitar a importacao da planilha `RegistroClinico.xlsx` em um banco que ja existia antes desta versao, execute tambem:
+
+```text
+supabase/migrations/20260704152000_excel_import_support.sql
+```
+
 Opcao com Supabase CLI:
 
 ```bash
@@ -78,3 +84,16 @@ A tela de IA funciona em dois niveis:
 - Com `openai.api_key` preenchida nos secrets: gera um resumo clinico narrativo e sugestoes de pontos de atencao.
 
 Use a saida de IA como apoio a organizacao do historico, nunca como diagnostico automatico.
+
+## Importar Excel
+
+A tela `Importar Excel` aceita a planilha `RegistroClinico.xlsx` e distribui os dados em tabelas normalizadas:
+
+- `patients`: pacientes e dados cadastrais.
+- `doctors`: medicos e locais de atendimento.
+- `visits`: consultas, sintomas, diagnosticos, tratamento e imagens.
+- `exams`: resultados laboratoriais com grupo, unidade, valor e status.
+- `vaccines`: vacinas.
+- `medication_catalog`, `exam_groups`, `exam_catalog`, `cid_codes`, `disease_categories`, `symptoms_catalog`: tabelas de referencia.
+
+A importacao usa chaves unicas e `upsert`, entao pode ser reexecutada para corrigir dados sem duplicar os principais registros.
