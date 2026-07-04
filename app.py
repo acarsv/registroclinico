@@ -912,6 +912,26 @@ def workbook_summary(file_bytes: bytes) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def import_schema_status() -> tuple[bool, str]:
+    client = supabase_client()
+    if client is None:
+        return False, "Supabase nao configurado."
+    try:
+        client.table("patients").select("id,address,health_plan,preexisting_conditions").limit(1).execute()
+        client.table("vaccines").select("id,source_key").limit(1).execute()
+        client.table("exam_catalog").select("id,name").limit(1).execute()
+        client.table("import_batches").select("id,file_name").limit(1).execute()
+        return True, "Schema de importacao pronto."
+    except Exception as exc:
+        return (
+            False,
+            "O banco ainda nao tem as colunas/tabelas de importacao. "
+            "Execute `supabase/migrations/20260704152000_excel_import_support.sql` "
+            "no SQL Editor do Supabase e depois reinicie o app. "
+            f"Detalhe tecnico: {exc}",
+        )
+
+
 def import_workbook(file_name: str, file_bytes: bytes) -> dict[str, int]:
     xl = pd.ExcelFile(BytesIO(file_bytes))
     counts: dict[str, int] = {}
@@ -954,6 +974,15 @@ def import_excel_view() -> None:
         "Pacientes, medicos, consultas, vacinas, resultados de exames e tabelas de referencia "
         "serao importados com atualizacao por chave unica para reduzir duplicidade."
     )
+
+    schema_ok, schema_message = import_schema_status()
+    if not schema_ok:
+        st.error(schema_message)
+        st.markdown("Execute esta migration no **SQL Editor** do Supabase:")
+        st.code("supabase/migrations/20260704152000_excel_import_support.sql", language="text")
+        with open("supabase/migrations/20260704152000_excel_import_support.sql", encoding="utf-8") as migration:
+            st.code(migration.read(), language="sql")
+        return
 
     if st.button("Importar para Supabase", type="primary"):
         try:
