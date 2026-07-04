@@ -1,0 +1,3 @@
+Criar um aplicativo usando streamlit e supabase pra banco
+postgree que será um registro clinico cadastro do paciente, doenças, medicamentos, medicos, exames e que for necessario
+para gerar graficos, tendencias e historicos alem aplicação de IA. 
