@@ -899,6 +899,14 @@ def exam_display_table(exams: pd.DataFrame) -> pd.DataFrame:
     return display.rename(columns=EXAM_COLUMN_LABELS)
 
 
+def exam_selection_table(exams: pd.DataFrame, selected_id: str | None) -> pd.DataFrame:
+    display = exam_display_table(exams)
+    ids = exams["id"].astype(str).tolist() if "id" in exams.columns else []
+    display.insert(0, "Selecionar", [exam_id == selected_id for exam_id in ids])
+    display.insert(1, "_id", ids)
+    return display
+
+
 def filter_exams_catalog(exams: pd.DataFrame, search: str) -> pd.DataFrame:
     if exams.empty or not search.strip():
         return exams
@@ -1041,23 +1049,32 @@ def exams_view(data: dict[str, pd.DataFrame]) -> None:
     if st.session_state.get("selected_exam_id") not in ids:
         st.session_state["selected_exam_id"] = ids[0]
 
-    indexed_exams = filtered.set_index("id", drop=False)
-
     st.markdown("**Exames cadastrados**")
-    selected_id = st.radio(
-        "Exames",
-        ids,
-        format_func=lambda exam_id: exam_display_name(indexed_exams.loc[exam_id]),
-        key="selected_exam_id",
-        label_visibility="collapsed",
+    table = exam_selection_table(filtered, st.session_state.get("selected_exam_id"))
+    edited_table = st.data_editor(
+        table,
+        use_container_width=True,
+        hide_index=True,
+        disabled=[column for column in table.columns if column != "Selecionar"],
+        column_config={
+            "Selecionar": st.column_config.CheckboxColumn("Selecionar"),
+            "_id": None,
+        },
+        key="exam_selection_table",
     )
+    selected_rows = edited_table[edited_table["Selecionar"]]
+    if not selected_rows.empty:
+        selected_id = str(selected_rows.iloc[-1]["_id"])
+        if selected_id != st.session_state.get("selected_exam_id"):
+            st.session_state["selected_exam_id"] = selected_id
+            st.rerun()
+    else:
+        selected_id = st.session_state.get("selected_exam_id")
 
     if edit_clicked and selected_id:
         exam_edit_dialog(exams, selected_id)
     if delete_clicked and selected_id:
         exam_delete_dialog(exams, selected_id)
-
-    st.dataframe(exam_display_table(filtered), use_container_width=True, hide_index=True)
 
 
 def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
