@@ -208,7 +208,11 @@ def insert_row(table: str, payload: dict[str, Any]) -> bool:
         for key, value in payload.items()
         if value not in ("", None)
     }
-    client.table(table).insert(clean).execute()
+    try:
+        client.table(table).insert(clean).execute()
+    except Exception as exc:
+        st.error(f"Não foi possível salvar em `{table}`. Verifique as permissões RLS no Supabase. Detalhe: {exc}")
+        return False
     st.cache_data.clear()
     st.success("Registro salvo.")
     return True
@@ -223,7 +227,11 @@ def update_row(table: str, row_id: str, payload: dict[str, Any]) -> bool:
         key: (value.isoformat() if isinstance(value, (date, datetime)) else value)
         for key, value in payload.items()
     }
-    client.table(table).update(clean).eq("id", row_id).execute()
+    try:
+        client.table(table).update(clean).eq("id", row_id).execute()
+    except Exception as exc:
+        st.error(f"Não foi possível atualizar `{table}`. Verifique as permissões RLS no Supabase. Detalhe: {exc}")
+        return False
     st.cache_data.clear()
     st.success("Registro atualizado.")
     return True
@@ -234,7 +242,11 @@ def delete_row(table: str, row_id: str, success_message: str = "Registro excluí
     if client is None:
         st.error("Configure o Supabase em .streamlit/secrets.toml antes de excluir dados.")
         return False
-    client.table(table).delete().eq("id", row_id).execute()
+    try:
+        client.table(table).delete().eq("id", row_id).execute()
+    except Exception as exc:
+        st.error(f"Não foi possível excluir de `{table}`. Verifique as permissões RLS no Supabase. Detalhe: {exc}")
+        return False
     st.cache_data.clear()
     st.success(success_message)
     return True
