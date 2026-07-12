@@ -51,6 +51,7 @@ create table if not exists exams (
   patient_id uuid not null references patients(id) on delete cascade,
   exam_type text not null,
   exam_date date not null default current_date,
+  source_num integer,
   result_text text,
   numeric_value numeric,
   unit text,
@@ -130,6 +131,7 @@ alter table visits add column if not exists image_url text;
 alter table visits add column if not exists image_url_2 text;
 
 alter table exams add column if not exists source_key text;
+alter table exams add column if not exists source_num integer;
 alter table exams add column if not exists exam_group text;
 alter table exams add column if not exists status_color text;
 alter table exams add column if not exists source_position numeric;
