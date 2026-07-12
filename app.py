@@ -437,53 +437,71 @@ def patient_edit_form(patients: pd.DataFrame, patient_id: str | None = None, rer
         return
     patient = patients[patients["id"] == patient_id].iloc[0]
 
-    with st.form("patient_edit_form"):
-        c1, c2, c3 = st.columns(3)
-        full_name = c1.text_input("Nome completo", value=str(patient.get("full_name") or ""))
-        birth_date_text = c2.text_input(
-            "Data de nascimento",
-            value=format_br_date(patient.get("birth_date")),
-            placeholder="DD/MM/AAAA",
-            help="Deixe em branco para remover a data.",
-        )
-        sex_options = ["Nao informado", "Feminino", "Masculino", "Outro"]
-        current_sex = patient.get("sex") if patient.get("sex") in sex_options else "Nao informado"
-        sex_labels = {"Nao informado": "Não informado"}
-        sex = c3.selectbox(
-            "Sexo",
-            sex_options,
-            index=sex_options.index(current_sex),
-            format_func=lambda option: sex_labels.get(option, option),
-        )
+    key_prefix = f"edit_patient_{patient_id}"
+    birth_date_key = f"{key_prefix}_birth_date"
+    phone_key = f"{key_prefix}_phone"
+    sex_options = ["Nao informado", "Feminino", "Masculino", "Outro"]
+    current_sex = patient.get("sex") if patient.get("sex") in sex_options else "Nao informado"
 
-        c4, c5, c6 = st.columns(3)
-        phone = c4.text_input("Telefone", value=str(patient.get("phone") or ""))
-        email = c5.text_input("Email", value=str(patient.get("email") or ""))
-        city = c6.text_input("Cidade", value=str(patient.get("city") or ""))
-        notes = st.text_area("Observações", value=str(patient.get("notes") or ""))
+    full_name = st.text_input(
+        "Nome completo",
+        value=str(patient.get("full_name") or ""),
+        key=f"{key_prefix}_full_name",
+    )
+    birth_date_text = st.text_input(
+        "Data de nascimento",
+        value=format_br_date(patient.get("birth_date")),
+        key=birth_date_key,
+        placeholder="DD/MM/AAAA",
+        help="Digite apenas os números. As barras serão inseridas automaticamente.",
+        max_chars=10,
+        on_change=apply_br_date_mask,
+        args=(birth_date_key,),
+    )
+    sex_labels = {"Nao informado": "Não informado"}
+    sex = st.selectbox(
+        "Sexo",
+        sex_options,
+        index=sex_options.index(current_sex),
+        key=f"{key_prefix}_sex",
+        format_func=lambda option: sex_labels.get(option, option),
+    )
+    phone = st.text_input(
+        "Telefone",
+        value=br_phone_mask(str(patient.get("phone") or "")),
+        key=phone_key,
+        placeholder="(00) 00000-0000",
+        help="Digite apenas os números. A formatação será aplicada ao sair do campo.",
+        max_chars=15,
+        on_change=apply_phone_mask,
+        args=(phone_key,),
+    )
+    email = st.text_input("Email", value=str(patient.get("email") or ""), key=f"{key_prefix}_email")
+    city = st.text_input("Cidade", value=str(patient.get("city") or ""), key=f"{key_prefix}_city")
+    notes = st.text_area("Observações", value=str(patient.get("notes") or ""), height=140, key=f"{key_prefix}_notes")
 
-        if st.form_submit_button("Atualizar paciente", type="primary"):
-            if not full_name.strip():
-                st.error("Informe o nome do paciente.")
-                return
-            birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
-            if birth_date_text.strip() and birth_date is None:
-                return
-            saved = update_row(
-                "patients",
-                patient_id,
-                {
-                    "full_name": full_name,
-                    "birth_date": birth_date,
-                    "sex": sex,
-                    "phone": phone,
-                    "email": email,
-                    "city": city,
-                    "notes": notes,
-                },
-            )
-            if saved and rerun_after_submit:
-                st.rerun()
+    if st.button("Atualizar paciente", type="primary"):
+        if not full_name.strip():
+            st.error("Informe o nome do paciente.")
+            return
+        birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
+        if birth_date_text.strip() and birth_date is None:
+            return
+        saved = update_row(
+            "patients",
+            patient_id,
+            {
+                "full_name": full_name,
+                "birth_date": birth_date,
+                "sex": sex,
+                "phone": phone,
+                "email": email,
+                "city": city,
+                "notes": notes,
+            },
+        )
+        if saved and rerun_after_submit:
+            st.rerun()
 
 
 def patient_display_name(patient: pd.Series) -> str:
