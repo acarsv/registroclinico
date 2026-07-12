@@ -82,6 +82,48 @@ TABLE_LABELS = {
     "import_batches": "Lotes de importação",
 }
 
+PATIENT_COLUMN_LABELS = {
+    "full_name": "Nome completo",
+    "birth_date": "Data de nascimento",
+    "sex": "Sexo",
+    "phone": "Telefone",
+    "email": "Email",
+    "city": "Cidade",
+    "notes": "Observações",
+    "naturality": "Naturalidade",
+    "cpf": "CPF",
+    "address": "Endereço",
+    "address_number": "Número",
+    "address_complement": "Complemento",
+    "neighborhood": "Bairro",
+    "state": "Estado",
+    "health_plan": "Plano de saúde",
+    "registration_date": "Data de cadastro",
+    "preexisting_conditions": "Condições preexistentes",
+    "created_at": "Criado em",
+}
+
+PATIENT_COLUMN_ORDER = [
+    "full_name",
+    "birth_date",
+    "sex",
+    "phone",
+    "email",
+    "city",
+    "cpf",
+    "health_plan",
+    "notes",
+    "naturality",
+    "address",
+    "address_number",
+    "address_complement",
+    "neighborhood",
+    "state",
+    "registration_date",
+    "preexisting_conditions",
+    "created_at",
+]
+
 
 def secret(path: str, default: str = "") -> str:
     current: Any = st.secrets
@@ -114,11 +156,11 @@ def fetch_table(table: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def insert_row(table: str, payload: dict[str, Any]) -> None:
+def insert_row(table: str, payload: dict[str, Any]) -> bool:
     client = supabase_client()
     if client is None:
         st.error("Configure o Supabase em .streamlit/secrets.toml antes de salvar dados.")
-        return
+        return False
     clean = {
         key: (value.isoformat() if isinstance(value, (date, datetime)) else value)
         for key, value in payload.items()
@@ -127,13 +169,14 @@ def insert_row(table: str, payload: dict[str, Any]) -> None:
     client.table(table).insert(clean).execute()
     st.cache_data.clear()
     st.success("Registro salvo.")
+    return True
 
 
-def update_row(table: str, row_id: str, payload: dict[str, Any]) -> None:
+def update_row(table: str, row_id: str, payload: dict[str, Any]) -> bool:
     client = supabase_client()
     if client is None:
         st.error("Configure o Supabase em .streamlit/secrets.toml antes de salvar dados.")
-        return
+        return False
     clean = {
         key: (value.isoformat() if isinstance(value, (date, datetime)) else value)
         for key, value in payload.items()
@@ -141,6 +184,18 @@ def update_row(table: str, row_id: str, payload: dict[str, Any]) -> None:
     client.table(table).update(clean).eq("id", row_id).execute()
     st.cache_data.clear()
     st.success("Paciente atualizado.")
+    return True
+
+
+def delete_row(table: str, row_id: str, success_message: str = "Registro excluído.") -> bool:
+    client = supabase_client()
+    if client is None:
+        st.error("Configure o Supabase em .streamlit/secrets.toml antes de excluir dados.")
+        return False
+    client.table(table).delete().eq("id", row_id).execute()
+    st.cache_data.clear()
+    st.success(success_message)
+    return True
 
 
 MIN_CLINICAL_DATE = date(1900, 1, 1)
@@ -274,7 +329,7 @@ def dashboard(data: dict[str, pd.DataFrame]) -> None:
         st.info("Cadastre exames para acompanhar volume e recorrência.")
 
 
-def patient_form() -> None:
+def patient_form(rerun_after_submit: bool = False) -> None:
     with st.form("patient_form", clear_on_submit=True):
         st.subheader("Novo paciente")
         c1, c2, c3 = st.columns(3)
@@ -295,7 +350,7 @@ def patient_form() -> None:
             if not full_name.strip():
                 st.error("Informe o nome do paciente.")
             else:
-                insert_row(
+                saved = insert_row(
                     "patients",
                     {
                         "full_name": full_name,
@@ -307,17 +362,23 @@ def patient_form() -> None:
                         "notes": notes,
                     },
                 )
+                if saved and rerun_after_submit:
+                    st.rerun()
 
 
-def patient_edit_form(patients: pd.DataFrame) -> None:
+def patient_edit_form(patients: pd.DataFrame, patient_id: str | None = None, rerun_after_submit: bool = False) -> None:
     st.subheader("Editar paciente")
     if patients.empty:
         st.info("Cadastre um paciente antes de editar.")
         return
 
     options = patient_options(patients)
-    selected_name = st.selectbox("Paciente", list(options), key="edit_patient_select")
-    patient_id = options[selected_name]
+    if patient_id is None:
+        selected_name = st.selectbox("Paciente", list(options), key="edit_patient_select")
+        patient_id = options[selected_name]
+    elif patient_id not in set(patients["id"]):
+        st.error("Paciente selecionado não encontrado.")
+        return
     patient = patients[patients["id"] == patient_id].iloc[0]
 
     with st.form("patient_edit_form"):
@@ -352,7 +413,7 @@ def patient_edit_form(patients: pd.DataFrame) -> None:
             birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
             if birth_date_text.strip() and birth_date is None:
                 return
-            update_row(
+            saved = update_row(
                 "patients",
                 patient_id,
                 {
@@ -365,6 +426,117 @@ def patient_edit_form(patients: pd.DataFrame) -> None:
                     "notes": notes,
                 },
             )
+            if saved and rerun_after_submit:
+                st.rerun()
+
+
+def patient_display_name(patient: pd.Series) -> str:
+    name = str(patient.get("full_name") or "Paciente sem nome")
+    cpf = str(patient.get("cpf") or "").strip()
+    if cpf:
+        return f"{name} - CPF {cpf}"
+    return name
+
+
+def patient_display_table(patients: pd.DataFrame) -> pd.DataFrame:
+    if patients.empty:
+        return pd.DataFrame(columns=list(PATIENT_COLUMN_LABELS.values()))
+    visible_columns = [column for column in PATIENT_COLUMN_ORDER if column in patients.columns]
+    remaining_columns = [
+        column
+        for column in patients.columns
+        if column not in visible_columns and column != "id"
+    ]
+    display = patients[visible_columns + remaining_columns].copy()
+    for column in ["birth_date", "registration_date", "created_at"]:
+        if column in display.columns:
+            display[column] = display[column].apply(format_br_date)
+    if "sex" in display.columns:
+        display["sex"] = display["sex"].replace({"Nao informado": "Não informado"})
+    return display.rename(columns=PATIENT_COLUMN_LABELS)
+
+
+def filter_patients(patients: pd.DataFrame, search: str) -> pd.DataFrame:
+    if patients.empty or not search.strip():
+        return patients
+    query = search.strip().casefold()
+    searchable_columns = [
+        column
+        for column in ["full_name", "cpf", "phone", "email", "city", "notes", "health_plan"]
+        if column in patients.columns
+    ]
+    searchable = patients[searchable_columns].fillna("").astype(str)
+    mask = searchable.apply(lambda column: column.str.casefold().str.contains(query, regex=False)).any(axis=1)
+    return patients[mask]
+
+
+@st.dialog("Novo paciente")
+def patient_new_dialog() -> None:
+    patient_form(rerun_after_submit=True)
+
+
+@st.dialog("Editar paciente")
+def patient_edit_dialog(patients: pd.DataFrame, patient_id: str) -> None:
+    patient_edit_form(patients, patient_id=patient_id, rerun_after_submit=True)
+
+
+@st.dialog("Excluir paciente")
+def patient_delete_dialog(patients: pd.DataFrame, patient_id: str) -> None:
+    patient = patients[patients["id"] == patient_id]
+    if patient.empty:
+        st.error("Paciente selecionado não encontrado.")
+        return
+    patient_name = str(patient.iloc[0].get("full_name") or "paciente selecionado")
+    st.warning(f"Tem certeza que deseja excluir {patient_name}? Esta ação também remove os registros clínicos vinculados.")
+    if st.button("Excluir paciente", type="primary"):
+        deleted = delete_row("patients", patient_id, "Paciente excluído.")
+        if deleted:
+            st.session_state.pop("selected_patient_id", None)
+            st.rerun()
+
+
+def patients_view(patients: pd.DataFrame) -> None:
+    st.subheader("Pacientes")
+
+    action_columns = st.columns([1, 1, 1, 4])
+    selected_id = st.session_state.get("selected_patient_id")
+    with action_columns[0]:
+        if st.button("Novo paciente", type="primary", use_container_width=True):
+            patient_new_dialog()
+    with action_columns[1]:
+        edit_clicked = st.button("Editar", use_container_width=True, disabled=not selected_id)
+    with action_columns[2]:
+        delete_clicked = st.button("Excluir", use_container_width=True, disabled=not selected_id)
+
+    search = st.text_input("Pesquisar paciente", placeholder="Digite nome, CPF, telefone, email, cidade ou observação")
+    filtered = filter_patients(patients, search).sort_values("full_name") if not patients.empty else patients
+
+    if filtered.empty:
+        st.info("Nenhum paciente encontrado.")
+        st.dataframe(patient_display_table(filtered), use_container_width=True, hide_index=True)
+        return
+
+    ids = filtered["id"].astype(str).tolist()
+    if st.session_state.get("selected_patient_id") not in ids:
+        st.session_state["selected_patient_id"] = ids[0]
+
+    indexed_patients = filtered.set_index("id", drop=False)
+
+    st.markdown("**Nomes dos pacientes**")
+    selected_id = st.radio(
+        "Pacientes",
+        ids,
+        format_func=lambda patient_id: patient_display_name(indexed_patients.loc[patient_id]),
+        key="selected_patient_id",
+        label_visibility="collapsed",
+    )
+
+    if edit_clicked and selected_id:
+        patient_edit_dialog(patients, selected_id)
+    if delete_clicked and selected_id:
+        patient_delete_dialog(patients, selected_id)
+
+    st.dataframe(patient_display_table(filtered), use_container_width=True, hide_index=True)
 
 
 def doctor_form() -> None:
@@ -1103,12 +1275,7 @@ def main() -> None:
     if page == "Dashboard":
         dashboard(data)
     elif page == "Pacientes":
-        new_tab, edit_tab = st.tabs(["Novo paciente", "Editar paciente"])
-        with new_tab:
-            patient_form()
-        with edit_tab:
-            patient_edit_form(data["patients"])
-        st.dataframe(data["patients"], use_container_width=True, hide_index=True)
+        patients_view(data["patients"])
     elif page == "Médicos":
         doctor_form()
         st.dataframe(data["doctors"], use_container_width=True, hide_index=True)
