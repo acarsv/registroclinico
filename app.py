@@ -145,36 +145,22 @@ DOCTOR_COLUMN_ORDER = [
 ]
 
 EXAM_COLUMN_LABELS = {
-    "source_key": "Chave do registro",
-    "exam_date": "Data da consulta",
-    "source_num": "Número da consulta",
-    "patient_name": "Paciente",
-    "exam_group": "Grupo do exame",
-    "exam_type": "Nome do exame",
+    "name": "Nome do exame",
+    "group_name": "Grupo",
     "unit": "Unidade",
-    "numeric_value": "Valor",
-    "result_text": "Resultado descritivo",
-    "status_color": "Observação",
-    "source_position": "Posição",
+    "description": "Descrição",
     "reference_range": "Valor de referência",
-    "file_url": "Link do arquivo",
+    "source_position": "Posição",
     "created_at": "Criado em",
 }
 
 EXAM_COLUMN_ORDER = [
-    "source_key",
-    "exam_date",
-    "source_num",
-    "patient_name",
-    "exam_group",
-    "exam_type",
+    "name",
+    "group_name",
     "unit",
-    "numeric_value",
-    "result_text",
-    "status_color",
-    "source_position",
+    "description",
     "reference_range",
-    "file_url",
+    "source_position",
     "created_at",
 ]
 
@@ -867,55 +853,60 @@ def doctors_view(doctors: pd.DataFrame) -> None:
 
 
 def display_text(value: Any) -> str:
-    if value in ("", None) or pd.isna(value):
+    if value is None or (isinstance(value, str) and value == "") or pd.isna(value):
         return ""
     return str(value)
 
 
-def exam_display_name(exam: pd.Series, patient_names: dict[str, str]) -> str:
-    patient_name = patient_names.get(str(exam.get("patient_id") or ""), "Paciente não informado")
-    exam_name = display_text(exam.get("exam_type")) or "Exame sem nome"
-    exam_date = format_br_date(exam.get("exam_date")) or "Sem data"
-    return f"{exam_date} - {patient_name} - {exam_name}"
+def exam_group_names(groups: pd.DataFrame) -> dict[str, str]:
+    if groups.empty:
+        return {}
+    return {
+        str(row["id"]): str(row["name"])
+        for _, row in groups.iterrows()
+        if row.get("id") and row.get("name")
+    }
 
 
-def exam_display_table(exams: pd.DataFrame, patients: pd.DataFrame) -> pd.DataFrame:
+def exam_catalog_display_name(exam: pd.Series, groups: pd.DataFrame) -> str:
+    group_name = exam_group_names(groups).get(str(exam.get("group_id") or ""), "")
+    exam_name = display_text(exam.get("name")) or "Exame sem nome"
+    if group_name:
+        return f"{exam_name} - {group_name}"
+    return exam_name
+
+
+def exam_catalog_display_table(exams: pd.DataFrame, groups: pd.DataFrame) -> pd.DataFrame:
     if exams.empty:
         return pd.DataFrame(columns=list(EXAM_COLUMN_LABELS.values()))
-    patient_names = {str(row["id"]): str(row["full_name"]) for _, row in patients.iterrows()} if not patients.empty else {}
     display = exams.copy()
-    display["patient_name"] = display["patient_id"].astype(str).map(patient_names).fillna("")
+    display["group_name"] = display["group_id"].astype(str).map(exam_group_names(groups)).fillna("")
     visible_columns = [column for column in EXAM_COLUMN_ORDER if column in display.columns]
     remaining_columns = [
         column
         for column in display.columns
-        if column not in visible_columns and column not in {"id", "patient_id"}
+        if column not in visible_columns and column not in {"id", "group_id"}
     ]
     display = display[visible_columns + remaining_columns].copy()
-    for column in ["exam_date", "created_at"]:
+    for column in ["created_at"]:
         if column in display.columns:
             display[column] = display[column].apply(format_br_date)
     return display.rename(columns=EXAM_COLUMN_LABELS)
 
 
-def filter_exams(exams: pd.DataFrame, patients: pd.DataFrame, search: str) -> pd.DataFrame:
+def filter_exam_catalog(exams: pd.DataFrame, groups: pd.DataFrame, search: str) -> pd.DataFrame:
     if exams.empty or not search.strip():
         return exams
-    patient_names = {str(row["id"]): str(row["full_name"]) for _, row in patients.iterrows()} if not patients.empty else {}
     searchable = exams.copy()
-    searchable["patient_name"] = searchable["patient_id"].astype(str).map(patient_names).fillna("")
+    searchable["group_name"] = searchable["group_id"].astype(str).map(exam_group_names(groups)).fillna("")
     query = search.strip().casefold()
     searchable_columns = [
         column
         for column in [
-            "source_key",
-            "patient_name",
-            "exam_group",
-            "exam_type",
+            "name",
+            "group_name",
             "unit",
-            "numeric_value",
-            "result_text",
-            "status_color",
+            "description",
             "reference_range",
         ]
         if column in searchable.columns
@@ -925,137 +916,101 @@ def filter_exams(exams: pd.DataFrame, patients: pd.DataFrame, search: str) -> pd
     return exams[mask]
 
 
-def exam_payload(
-    patient_id: str,
-    exam_date_text: str,
-    source_num_text: str,
-    exam_group: str,
-    exam_type: str,
-    unit: str,
-    numeric_value_text: str,
-    result_text: str,
-    status_color: str,
-    source_position_text: str,
-    reference_range: str,
-    file_url: str,
-    source_key_text: str,
-) -> dict[str, Any] | None:
-    exam_date = parse_br_date(exam_date_text) if exam_date_text.strip() else None
-    if exam_date_text.strip() and exam_date is None:
+def ensure_exam_group(group_name: str) -> str | None:
+    group_name = group_name.strip()
+    if not group_name:
         return None
-    source_num = int(clean_number(source_num_text) or 0) or None
-    numeric_value = clean_number(numeric_value_text)
+    client = supabase_client()
+    if client is None:
+        st.error("Configure o Supabase em .streamlit/secrets.toml antes de salvar dados.")
+        return None
+    existing = client.table("exam_groups").select("id").eq("name", group_name).limit(1).execute()
+    if existing.data:
+        return existing.data[0]["id"]
+    created = client.table("exam_groups").insert({"name": group_name}).execute()
+    st.cache_data.clear()
+    return created.data[0]["id"] if created.data else None
+
+
+def exam_catalog_payload(
+    name: str,
+    group_name: str,
+    unit: str,
+    description: str,
+    reference_range: str,
+    source_position_text: str,
+) -> dict[str, Any] | None:
+    group_id = ensure_exam_group(group_name)
+    if group_name.strip() and group_id is None:
+        return None
     source_position = clean_number(source_position_text)
-    generated_key = source_key(patient_id, exam_date, source_num, exam_group, exam_type, numeric_value_text)
     return {
-        "patient_id": patient_id,
-        "exam_date": exam_date or date.today(),
-        "source_num": source_num,
-        "exam_group": exam_group,
-        "exam_type": exam_type,
+        "name": name,
+        "group_id": group_id,
         "unit": unit,
-        "numeric_value": numeric_value,
-        "result_text": result_text,
-        "status_color": status_color,
-        "source_position": source_position,
+        "description": description,
         "reference_range": reference_range,
-        "file_url": file_url,
-        "source_key": source_key_text.strip() or generated_key,
+        "source_position": int(source_position) if source_position is not None else None,
     }
 
 
-def exam_form(patients: pd.DataFrame, exam: pd.Series | None = None, rerun_after_submit: bool = False) -> None:
+def exam_catalog_form(exams: pd.DataFrame, groups: pd.DataFrame, exam: pd.Series | None = None, rerun_after_submit: bool = False) -> None:
     editing = exam is not None
     st.subheader("Editar exame" if editing else "Novo exame")
-    patient_options_map = patient_options(patients)
-    if not patient_options_map:
-        st.info("Cadastre um paciente antes de adicionar exames.")
-        return
-
     key_prefix = f"edit_exam_{exam.get('id')}" if editing else "new_exam"
-    patient_names = list(patient_options_map)
-    current_patient_id = str(exam.get("patient_id") or "") if editing else ""
-    current_patient_name = next((name for name, patient_id in patient_options_map.items() if patient_id == current_patient_id), patient_names[0])
-    patient_name = st.selectbox(
-        "Paciente",
-        patient_names,
-        index=patient_names.index(current_patient_name),
-        key=f"{key_prefix}_patient",
-    )
-    exam_date_key = f"{key_prefix}_exam_date"
-    exam_date_text = st.text_input(
-        "Data da consulta",
-        value=format_br_date(exam.get("exam_date")) if editing else "",
-        key=exam_date_key,
-        placeholder="DD/MM/AAAA",
-        help="Digite apenas os números. As barras serão inseridas automaticamente.",
-        max_chars=10,
-        on_change=apply_br_date_mask,
-        args=(exam_date_key,),
-    )
-    source_num_text = st.text_input("Número da consulta", value=display_text(exam.get("source_num")) if editing else "", key=f"{key_prefix}_source_num")
-    source_key_text = st.text_input("Chave do registro", value=display_text(exam.get("source_key")) if editing else "", key=f"{key_prefix}_source_key")
-    exam_group = st.text_input("Grupo do exame", value=display_text(exam.get("exam_group")) if editing else "", key=f"{key_prefix}_exam_group")
-    exam_type = st.text_input("Nome do exame", value=display_text(exam.get("exam_type")) if editing else "", key=f"{key_prefix}_exam_type")
+    group_name_map = exam_group_names(groups)
+    current_group = group_name_map.get(str(exam.get("group_id") or ""), "") if editing else ""
+
+    name = st.text_input("Nome do exame", value=display_text(exam.get("name")) if editing else "", key=f"{key_prefix}_name")
+    group_name = st.text_input("Grupo", value=current_group, key=f"{key_prefix}_group")
     unit = st.text_input("Unidade", value=display_text(exam.get("unit")) if editing else "", key=f"{key_prefix}_unit")
-    numeric_value_text = st.text_input("Valor", value=display_text(exam.get("numeric_value")) if editing else "", key=f"{key_prefix}_numeric_value")
-    status_color = st.text_input("Observação", value=display_text(exam.get("status_color")) if editing else "", key=f"{key_prefix}_status_color")
-    source_position_text = st.text_input("Posição", value=display_text(exam.get("source_position")) if editing else "", key=f"{key_prefix}_source_position")
+    description = st.text_area("Descrição", value=display_text(exam.get("description")) if editing else "", height=120, key=f"{key_prefix}_description")
     reference_range = st.text_input("Valor de referência", value=display_text(exam.get("reference_range")) if editing else "", key=f"{key_prefix}_reference_range")
-    file_url = st.text_input("Link do arquivo", value=display_text(exam.get("file_url")) if editing else "", key=f"{key_prefix}_file_url")
-    result_text = st.text_area("Resultado descritivo", value=display_text(exam.get("result_text")) if editing else "", height=120, key=f"{key_prefix}_result_text")
+    source_position_text = st.text_input("Posição", value=display_text(exam.get("source_position")) if editing else "", key=f"{key_prefix}_source_position")
 
     button_label = "Atualizar exame" if editing else "Salvar exame"
     if st.button(button_label, type="primary"):
-        if not exam_type.strip():
+        if not name.strip():
             st.error("Informe o nome do exame.")
             return
-        payload = exam_payload(
-            patient_options_map[patient_name],
-            exam_date_text,
-            source_num_text,
-            exam_group,
-            exam_type,
+        payload = exam_catalog_payload(
+            name,
+            group_name,
             unit,
-            numeric_value_text,
-            result_text,
-            status_color,
-            source_position_text,
+            description,
             reference_range,
-            file_url,
-            source_key_text,
+            source_position_text,
         )
         if payload is None:
             return
-        saved = update_row("exams", str(exam.get("id")), payload) if editing else insert_row("exams", payload)
+        saved = update_row("exam_catalog", str(exam.get("id")), payload) if editing else insert_row("exam_catalog", payload)
         if saved and rerun_after_submit:
             st.rerun()
 
 
 @st.dialog("Novo exame", width="large")
-def exam_new_dialog(patients: pd.DataFrame) -> None:
-    exam_form(patients, rerun_after_submit=True)
+def exam_new_dialog(exams: pd.DataFrame, groups: pd.DataFrame) -> None:
+    exam_catalog_form(exams, groups, rerun_after_submit=True)
 
 
 @st.dialog("Editar exame", width="large")
-def exam_edit_dialog(exams: pd.DataFrame, patients: pd.DataFrame, exam_id: str) -> None:
+def exam_edit_dialog(exams: pd.DataFrame, groups: pd.DataFrame, exam_id: str) -> None:
     exam = exams[exams["id"] == exam_id]
     if exam.empty:
         st.error("Exame selecionado não encontrado.")
         return
-    exam_form(patients, exam=exam.iloc[0], rerun_after_submit=True)
+    exam_catalog_form(exams, groups, exam=exam.iloc[0], rerun_after_submit=True)
 
 
 @st.dialog("Excluir exame")
-def exam_delete_dialog(exams: pd.DataFrame, patients: pd.DataFrame, exam_id: str) -> None:
+def exam_delete_dialog(exams: pd.DataFrame, groups: pd.DataFrame, exam_id: str) -> None:
     exam = exams[exams["id"] == exam_id]
     if exam.empty:
         st.error("Exame selecionado não encontrado.")
         return
-    patient_names = {str(row["id"]): str(row["full_name"]) for _, row in patients.iterrows()} if not patients.empty else {}
-    st.warning(f"Tem certeza que deseja excluir {exam_display_name(exam.iloc[0], patient_names)}?")
+    st.warning(f"Tem certeza que deseja excluir {exam_catalog_display_name(exam.iloc[0], groups)}?")
     if st.button("Excluir exame", type="primary"):
-        deleted = delete_row("exams", exam_id, "Exame excluído.")
+        deleted = delete_row("exam_catalog", exam_id, "Exame excluído.")
         if deleted:
             st.session_state.pop("selected_exam_id", None)
             st.rerun()
@@ -1063,51 +1018,50 @@ def exam_delete_dialog(exams: pd.DataFrame, patients: pd.DataFrame, exam_id: str
 
 def exams_view(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Exames")
-    exams = data["exams"].copy()
-    patients = data["patients"].copy()
+    exams = data["exam_catalog"].copy()
+    groups = data["exam_groups"].copy()
 
     action_columns = st.columns([1, 1, 1, 4])
     selected_id = st.session_state.get("selected_exam_id")
     with action_columns[0]:
         if st.button("Novo exame", type="primary", use_container_width=True):
-            exam_new_dialog(patients)
+            exam_new_dialog(exams, groups)
     with action_columns[1]:
         edit_clicked = st.button("Editar", use_container_width=True, disabled=not selected_id)
     with action_columns[2]:
         delete_clicked = st.button("Excluir", use_container_width=True, disabled=not selected_id)
 
-    search = st.text_input("Pesquisar exame", placeholder="Digite paciente, grupo, nome do exame, valor, observação ou chave")
-    filtered = filter_exams(exams, patients, search)
-    if not filtered.empty and "exam_date" in filtered.columns:
-        filtered = filtered.sort_values("exam_date", ascending=False)
+    search = st.text_input("Pesquisar exame", placeholder="Digite nome, grupo, unidade, descrição ou valor de referência")
+    filtered = filter_exam_catalog(exams, groups, search)
+    if not filtered.empty and "name" in filtered.columns:
+        filtered = filtered.sort_values("name")
 
     if filtered.empty:
         st.info("Nenhum exame encontrado.")
-        st.dataframe(exam_display_table(filtered, patients), use_container_width=True, hide_index=True)
+        st.dataframe(exam_catalog_display_table(filtered, groups), use_container_width=True, hide_index=True)
         return
 
     ids = filtered["id"].astype(str).tolist()
     if st.session_state.get("selected_exam_id") not in ids:
         st.session_state["selected_exam_id"] = ids[0]
 
-    patient_names = {str(row["id"]): str(row["full_name"]) for _, row in patients.iterrows()} if not patients.empty else {}
     indexed_exams = filtered.set_index("id", drop=False)
 
-    st.markdown("**Exames registrados**")
+    st.markdown("**Exames cadastrados**")
     selected_id = st.radio(
         "Exames",
         ids,
-        format_func=lambda exam_id: exam_display_name(indexed_exams.loc[exam_id], patient_names),
+        format_func=lambda exam_id: exam_catalog_display_name(indexed_exams.loc[exam_id], groups),
         key="selected_exam_id",
         label_visibility="collapsed",
     )
 
     if edit_clicked and selected_id:
-        exam_edit_dialog(exams, patients, selected_id)
+        exam_edit_dialog(exams, groups, selected_id)
     if delete_clicked and selected_id:
-        exam_delete_dialog(exams, patients, selected_id)
+        exam_delete_dialog(exams, groups, selected_id)
 
-    st.dataframe(exam_display_table(filtered, patients), use_container_width=True, hide_index=True)
+    st.dataframe(exam_catalog_display_table(filtered, groups), use_container_width=True, hide_index=True)
 
 
 def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
@@ -1515,12 +1469,14 @@ def import_reference_tables(xl: pd.ExcelFile) -> dict[str, int]:
         group_name = clean_text(item.get(4))
         if not name:
             continue
+        description = clean_text(item.get(2))
         exam_rows.append(
             {
                 "name": name,
                 "group_id": group_map.get(group_name or ""),
                 "unit": clean_text(item.get(1)),
-                "reference_range": clean_text(item.get(2)),
+                "description": description,
+                "reference_range": description,
                 "source_position": int(clean_number(item.get(5)) or 0) or None,
             }
         )

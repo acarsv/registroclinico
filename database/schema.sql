@@ -168,6 +168,7 @@ create table if not exists exam_catalog (
   name text not null,
   group_id uuid references exam_groups(id) on delete set null,
   unit text,
+  description text,
   reference_range text,
   source_position integer,
   created_at timestamptz not null default now(),
