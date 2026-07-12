@@ -229,6 +229,21 @@ def apply_br_date_mask(key: str) -> None:
     st.session_state[key] = br_date_mask(str(st.session_state.get(key, "")))
 
 
+def br_phone_mask(value: str) -> str:
+    digits = re.sub(r"\D", "", value)[:11]
+    if len(digits) <= 2:
+        return digits
+    if len(digits) <= 6:
+        return f"({digits[:2]}) {digits[2:]}"
+    if len(digits) <= 10:
+        return f"({digits[:2]}) {digits[2:6]}-{digits[6:]}"
+    return f"({digits[:2]}) {digits[2:7]}-{digits[7:]}"
+
+
+def apply_phone_mask(key: str) -> None:
+    st.session_state[key] = br_phone_mask(str(st.session_state.get(key, "")))
+
+
 def format_br_date(value: Any) -> str:
     if value in ("", None) or pd.isna(value):
         return ""
@@ -361,7 +376,15 @@ def patient_form(rerun_after_submit: bool = False) -> None:
         key="new_patient_sex",
         format_func=lambda option: sex_labels.get(option, option),
     )
-    phone = st.text_input("Telefone", key="new_patient_phone")
+    phone = st.text_input(
+        "Telefone",
+        key="new_patient_phone",
+        placeholder="(00) 00000-0000",
+        help="Digite apenas os números. A formatação será aplicada ao sair do campo.",
+        max_chars=15,
+        on_change=apply_phone_mask,
+        args=("new_patient_phone",),
+    )
     email = st.text_input("Email", key="new_patient_email")
     city = st.text_input("Cidade", key="new_patient_city")
     notes = st.text_area("Observações", height=140, key="new_patient_notes")
