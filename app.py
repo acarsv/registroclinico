@@ -27,7 +27,7 @@ def running_inside_streamlit() -> bool:
 if __name__ == "__main__" and not running_inside_streamlit():
     script_path = Path(__file__).resolve()
     print("Iniciando o aplicativo com Streamlit...")
-    print("Se o navegador nao abrir automaticamente, acesse: http://localhost:8501")
+    print("Se o navegador não abrir automaticamente, acesse: http://localhost:8501")
     subprocess.run(
         [
             sys.executable,
@@ -43,7 +43,7 @@ if __name__ == "__main__" and not running_inside_streamlit():
     sys.exit()
 
 
-st.set_page_config(page_title="Registro Clinico", page_icon="RC", layout="wide")
+st.set_page_config(page_title="Registro Clínico", page_icon="RC", layout="wide")
 
 
 TABLES = [
@@ -63,6 +63,24 @@ TABLES = [
     "symptoms_catalog",
     "import_batches",
 ]
+
+TABLE_LABELS = {
+    "patients": "Pacientes",
+    "doctors": "Médicos",
+    "conditions": "Condições",
+    "medications": "Medicamentos",
+    "exams": "Exames",
+    "visits": "Consultas",
+    "vaccines": "Vacinas",
+    "medication_catalog": "Catálogo de medicamentos",
+    "exam_groups": "Grupos de exames",
+    "exam_catalog": "Catálogo de exames",
+    "cid_codes": "Códigos CID",
+    "doencas": "Doenças",
+    "disease_categories": "Categorias de doenças",
+    "symptoms_catalog": "Catálogo de sintomas",
+    "import_batches": "Lotes de importação",
+}
 
 
 def secret(path: str, default: str = "") -> str:
@@ -203,8 +221,8 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 def setup_warning() -> None:
     if supabase_client() is None:
-        st.warning("Supabase ainda nao configurado.")
-        st.markdown("Preencha o arquivo de configuracao local:")
+        st.warning("Supabase ainda não configurado.")
+        st.markdown("Preencha o arquivo de configuração local:")
         st.code(".streamlit/secrets.toml", language="text")
         st.markdown("Depois execute este script no SQL Editor do Supabase:")
         st.code("database/schema.sql", language="text")
@@ -219,13 +237,13 @@ def dashboard(data: dict[str, pd.DataFrame]) -> None:
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Pacientes", len(patients))
-    col2.metric("Doencas ativas", int((conditions.get("status") == "Ativa").sum()) if not conditions.empty else 0)
+    col2.metric("Doenças ativas", int((conditions.get("status") == "Ativa").sum()) if not conditions.empty else 0)
     col3.metric("Medicamentos em uso", int((medications.get("status") == "Em uso").sum()) if not medications.empty else 0)
     col4.metric("Consultas", len(visits))
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Perfil etario")
+        st.subheader("Perfil etário")
         if not patients.empty and "birth_date" in patients:
             patients["idade"] = patients["birth_date"].apply(calc_age)
             patients["faixa"] = pd.cut(
@@ -236,16 +254,16 @@ def dashboard(data: dict[str, pd.DataFrame]) -> None:
             chart_data = patients.dropna(subset=["faixa"]).groupby("faixa", observed=False).size().reset_index(name="total")
             st.plotly_chart(px.bar(chart_data, x="faixa", y="total"), use_container_width=True)
         else:
-            st.info("Cadastre pacientes com data de nascimento para ver o grafico.")
+            st.info("Cadastre pacientes com data de nascimento para ver o gráfico.")
 
     with right:
-        st.subheader("Condicoes mais frequentes")
+        st.subheader("Condições mais frequentes")
         if not conditions.empty:
             chart_data = conditions["name"].value_counts().head(10).reset_index()
-            chart_data.columns = ["condicao", "total"]
-            st.plotly_chart(px.bar(chart_data, x="total", y="condicao", orientation="h"), use_container_width=True)
+            chart_data.columns = ["condição", "total"]
+            st.plotly_chart(px.bar(chart_data, x="total", y="condição", orientation="h"), use_container_width=True)
         else:
-            st.info("Cadastre condicoes clinicas para ver tendencias.")
+            st.info("Cadastre condições clínicas para ver tendências.")
 
     st.subheader("Linha do tempo de exames")
     if not exams.empty:
@@ -253,7 +271,7 @@ def dashboard(data: dict[str, pd.DataFrame]) -> None:
         timeline = exams.groupby([pd.Grouper(key="exam_date", freq="ME"), "exam_type"]).size().reset_index(name="total")
         st.plotly_chart(px.line(timeline, x="exam_date", y="total", color="exam_type", markers=True), use_container_width=True)
     else:
-        st.info("Cadastre exames para acompanhar volume e recorrencia.")
+        st.info("Cadastre exames para acompanhar volume e recorrência.")
 
 
 def patient_form() -> None:
@@ -262,12 +280,17 @@ def patient_form() -> None:
         c1, c2, c3 = st.columns(3)
         full_name = c1.text_input("Nome completo")
         birth_date = birth_date_input(c2)
-        sex = c3.selectbox("Sexo", ["Nao informado", "Feminino", "Masculino", "Outro"])
+        sex_labels = {"Nao informado": "Não informado"}
+        sex = c3.selectbox(
+            "Sexo",
+            ["Nao informado", "Feminino", "Masculino", "Outro"],
+            format_func=lambda option: sex_labels.get(option, option),
+        )
         c4, c5, c6 = st.columns(3)
         phone = c4.text_input("Telefone")
         email = c5.text_input("Email")
         city = c6.text_input("Cidade")
-        notes = st.text_area("Observacoes")
+        notes = st.text_area("Observações")
         if st.form_submit_button("Salvar paciente", type="primary"):
             if not full_name.strip():
                 st.error("Informe o nome do paciente.")
@@ -308,13 +331,19 @@ def patient_edit_form(patients: pd.DataFrame) -> None:
         )
         sex_options = ["Nao informado", "Feminino", "Masculino", "Outro"]
         current_sex = patient.get("sex") if patient.get("sex") in sex_options else "Nao informado"
-        sex = c3.selectbox("Sexo", sex_options, index=sex_options.index(current_sex))
+        sex_labels = {"Nao informado": "Não informado"}
+        sex = c3.selectbox(
+            "Sexo",
+            sex_options,
+            index=sex_options.index(current_sex),
+            format_func=lambda option: sex_labels.get(option, option),
+        )
 
         c4, c5, c6 = st.columns(3)
         phone = c4.text_input("Telefone", value=str(patient.get("phone") or ""))
         email = c5.text_input("Email", value=str(patient.get("email") or ""))
         city = c6.text_input("Cidade", value=str(patient.get("city") or ""))
-        notes = st.text_area("Observacoes", value=str(patient.get("notes") or ""))
+        notes = st.text_area("Observações", value=str(patient.get("notes") or ""))
 
         if st.form_submit_button("Atualizar paciente", type="primary"):
             if not full_name.strip():
@@ -340,7 +369,7 @@ def patient_edit_form(patients: pd.DataFrame) -> None:
 
 def doctor_form() -> None:
     with st.form("doctor_form", clear_on_submit=True):
-        st.subheader("Novo medico")
+        st.subheader("Novo médico")
         c1, c2, c3 = st.columns(3)
         full_name = c1.text_input("Nome")
         specialty = c2.text_input("Especialidade")
@@ -349,9 +378,9 @@ def doctor_form() -> None:
         phone = c4.text_input("Telefone")
         email = c5.text_input("Email")
         location = c6.text_input("Local")
-        if st.form_submit_button("Salvar medico", type="primary"):
+        if st.form_submit_button("Salvar médico", type="primary"):
             if not full_name.strip():
-                st.error("Informe o nome do medico.")
+                st.error("Informe o nome do médico.")
             else:
                 insert_row(
                     "doctors",
@@ -370,22 +399,27 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
     patients = patient_options(data["patients"])
     doctors = doctor_options(data["doctors"])
     if not patients:
-        st.info("Cadastre um paciente antes de adicionar historico clinico.")
+        st.info("Cadastre um paciente antes de adicionar histórico clínico.")
         return
 
-    tabs = st.tabs(["Doencas", "Medicamentos", "Exames", "Consultas"])
+    tabs = st.tabs(["Doenças", "Medicamentos", "Exames", "Consultas"])
 
     with tabs[0], st.form("condition_form", clear_on_submit=True):
         patient_id = patients[st.selectbox("Paciente", list(patients))]
-        name = st.text_input("Doenca ou condicao")
+        name = st.text_input("Doença ou condição")
         c1, c2 = st.columns(2)
         status = c1.selectbox("Status", ["Ativa", "Controlada", "Resolvida", "Suspeita"])
-        severity = c2.selectbox("Gravidade", ["Baixa", "Moderada", "Alta", "Critica"], index=1)
-        diagnosed_at = optional_date_input("Data de diagnostico", "condition_diagnosed_at")
-        notes = st.text_area("Observacoes")
-        if st.form_submit_button("Salvar condicao", type="primary"):
+        severity = c2.selectbox(
+            "Gravidade",
+            ["Baixa", "Moderada", "Alta", "Critica"],
+            index=1,
+            format_func=lambda option: "Crítica" if option == "Critica" else option,
+        )
+        diagnosed_at = optional_date_input("Data de diagnóstico", "condition_diagnosed_at")
+        notes = st.text_area("Observações")
+        if st.form_submit_button("Salvar condição", type="primary"):
             if not name.strip():
-                st.error("Informe a doenca ou condicao.")
+                st.error("Informe a doença ou condição.")
             else:
                 insert_row(
                     "conditions",
@@ -404,12 +438,12 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
         name = st.text_input("Medicamento")
         c1, c2, c3 = st.columns(3)
         dosage = c1.text_input("Dose")
-        frequency = c2.text_input("Frequencia")
+        frequency = c2.text_input("Frequência")
         status = c3.selectbox("Status", ["Em uso", "Pausado", "Encerrado"])
         c4, c5 = st.columns(2)
-        started_at = optional_date_input("Inicio", "medication_started_at", c4)
+        started_at = optional_date_input("Início", "medication_started_at", c4)
         ended_at = optional_date_input("Fim", "medication_ended_at", c5)
-        notes = st.text_area("Observacoes")
+        notes = st.text_area("Observações")
         if st.form_submit_button("Salvar medicamento", type="primary"):
             if not name.strip():
                 st.error("Informe o medicamento.")
@@ -438,9 +472,9 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
             min_value=MIN_CLINICAL_DATE,
             max_value=MAX_CLINICAL_DATE,
         )
-        numeric_value = optional_number_input("Valor numerico", "exam_numeric_value", c2)
+        numeric_value = optional_number_input("Valor numérico", "exam_numeric_value", c2)
         unit = c3.text_input("Unidade")
-        reference_range = st.text_input("Valor de referencia")
+        reference_range = st.text_input("Valor de referência")
         result_text = st.text_area("Resultado descritivo")
         file_url = st.text_input("Link do arquivo")
         if st.form_submit_button("Salvar exame", type="primary"):
@@ -463,7 +497,7 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
 
     with tabs[3], st.form("visit_form", clear_on_submit=True):
         patient_id = patients[st.selectbox("Paciente", list(patients), key="visit_patient")]
-        doctor_name = st.selectbox("Medico", [""] + list(doctors), key="visit_doctor")
+        doctor_name = st.selectbox("Médico", [""] + list(doctors), key="visit_doctor")
         doctor_id = doctors.get(doctor_name)
         visit_date = st.date_input(
             "Data da consulta",
@@ -472,7 +506,7 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
             max_value=MAX_CLINICAL_DATE,
         )
         reason = st.text_area("Motivo")
-        diagnosis = st.text_area("Diagnostico/hipotese")
+        diagnosis = st.text_area("Diagnóstico/hipótese")
         plan = st.text_area("Conduta/plano")
         if st.form_submit_button("Salvar consulta", type="primary"):
             insert_row(
@@ -491,13 +525,13 @@ def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
 def history_view(data: dict[str, pd.DataFrame]) -> None:
     patients = patient_options(data["patients"])
     if not patients:
-        st.info("Cadastre pacientes para visualizar historicos.")
+        st.info("Cadastre pacientes para visualizar históricos.")
         return
     name = st.selectbox("Paciente", list(patients))
     patient_id = patients[name]
     st.subheader(name)
     for table, title in [
-        ("conditions", "Doencas"),
+        ("conditions", "Doenças"),
         ("medications", "Medicamentos"),
         ("exams", "Exames"),
         ("visits", "Consultas"),
@@ -516,7 +550,7 @@ def local_insights(patient_name: str, frames: dict[str, pd.DataFrame]) -> str:
     exams = frames["exams"]
     parts = [
         f"Paciente: {patient_name}.",
-        f"Condicoes ativas: {len(active)}.",
+        f"Condições ativas: {len(active)}.",
         f"Medicamentos em uso: {len(meds)}.",
         f"Exames registrados: {len(exams)}.",
     ]
@@ -524,18 +558,18 @@ def local_insights(patient_name: str, frames: dict[str, pd.DataFrame]) -> str:
         numeric = exams.dropna(subset=["numeric_value"])
         if not numeric.empty:
             latest = numeric.sort_values("exam_date").tail(3)[["exam_type", "exam_date", "numeric_value", "unit"]]
-            parts.append("Ultimos exames numericos: " + latest.to_dict("records").__repr__())
+            parts.append("Últimos exames numéricos: " + latest.to_dict("records").__repr__())
     if len(active) >= 3 or len(meds) >= 5:
-        parts.append("Ponto de atencao: revisar polifarmacia, interacoes e prioridades do plano terapeutico.")
+        parts.append("Ponto de atenção: revisar polifarmácia, interações e prioridades do plano terapêutico.")
     return "\n".join(parts)
 
 
 def ai_view(data: dict[str, pd.DataFrame]) -> None:
     patients = patient_options(data["patients"])
     if not patients:
-        st.info("Cadastre pacientes para usar a analise.")
+        st.info("Cadastre pacientes para usar a análise.")
         return
-    patient_name = st.selectbox("Paciente para analise", list(patients))
+    patient_name = st.selectbox("Paciente para análise", list(patients))
     patient_id = patients[patient_name]
     scoped = {
         table: frame[frame["patient_id"] == patient_id].copy() if "patient_id" in frame.columns else frame
@@ -544,20 +578,20 @@ def ai_view(data: dict[str, pd.DataFrame]) -> None:
     baseline = local_insights(patient_name, scoped)
     st.text_area("Resumo estruturado", baseline, height=180)
 
-    if st.button("Gerar analise com IA", type="primary"):
+    if st.button("Gerar análise com IA", type="primary"):
         api_key = secret("openai.api_key")
         if not api_key:
-            st.info("Preencha `openai.api_key` nos secrets para habilitar IA generativa. A analise por regras ja esta acima.")
+            st.info("Preencha `openai.api_key` nos secrets para habilitar IA generativa. A análise por regras já está acima.")
             return
         try:
             from openai import OpenAI
 
             client = OpenAI(api_key=api_key)
             prompt = (
-                "Voce apoia organizacao de registro clinico. Nao de diagnostico definitivo. "
-                "Resuma historico, tendencias, lacunas de dados e perguntas para a proxima consulta.\n\n"
+                "Você apoia a organização de registro clínico. Não dê diagnóstico definitivo. "
+                "Resuma histórico, tendências, lacunas de dados e perguntas para a próxima consulta.\n\n"
                 f"{baseline}\n\nDados:\n"
-                f"Doencas: {scoped['conditions'].to_dict('records')}\n"
+                f"Doenças: {scoped['conditions'].to_dict('records')}\n"
                 f"Medicamentos: {scoped['medications'].to_dict('records')}\n"
                 f"Exames: {scoped['exams'].to_dict('records')}\n"
                 f"Consultas: {scoped['visits'].to_dict('records')}"
@@ -569,7 +603,7 @@ def ai_view(data: dict[str, pd.DataFrame]) -> None:
             )
             st.markdown(response.output_text)
         except Exception as exc:
-            st.error(f"Nao foi possivel gerar a analise: {exc}")
+            st.error(f"Não foi possível gerar a análise: {exc}")
 
 
 def clean_text(value: Any) -> str | None:
@@ -937,22 +971,22 @@ def workbook_summary(file_bytes: bytes) -> pd.DataFrame:
 def import_schema_status() -> tuple[bool, str]:
     client = supabase_client()
     if client is None:
-        return False, "Supabase nao configurado."
+        return False, "Supabase não configurado."
     try:
         client.table("patients").select("id,address,health_plan,preexisting_conditions").limit(1).execute()
         client.table("vaccines").select("id,source_key").limit(1).execute()
         client.table("exam_catalog").select("id,name").limit(1).execute()
         client.table("doencas").select("id,cid,doenca,descricao").limit(1).execute()
         client.table("import_batches").select("id,file_name").limit(1).execute()
-        return True, "Schema de importacao pronto."
+        return True, "Schema de importação pronto."
     except Exception as exc:
         return (
             False,
-            "O banco ainda nao tem as colunas/tabelas de importacao. "
+            "O banco ainda não tem as colunas/tabelas de importação. "
             "Execute `supabase/migrations/20260704152000_excel_import_support.sql` e "
             "`supabase/migrations/20260704160000_doencas_table.sql` "
             "no SQL Editor do Supabase e depois reinicie o app. "
-            f"Detalhe tecnico: {exc}",
+            f"Detalhe técnico: {exc}",
         )
 
 
@@ -990,13 +1024,13 @@ def import_excel_view() -> None:
         return
 
     file_bytes = uploaded.getvalue()
-    st.markdown("**Previa da planilha**")
+    st.markdown("**Prévia da planilha**")
     st.dataframe(workbook_summary(file_bytes), use_container_width=True, hide_index=True)
 
     st.markdown("**Destino dos dados**")
     st.write(
-        "Pacientes, medicos, consultas, vacinas, resultados de exames, doencas e tabelas de referencia "
-        "serao importados com atualizacao por chave unica para reduzir duplicidade."
+        "Pacientes, médicos, consultas, vacinas, resultados de exames, doenças e tabelas de referência "
+        "serão importados com atualização por chave única para reduzir duplicidade."
     )
 
     schema_ok, schema_message = import_schema_status()
@@ -1014,48 +1048,52 @@ def import_excel_view() -> None:
     if st.button("Importar para Supabase", type="primary"):
         try:
             counts = import_workbook(uploaded.name, file_bytes)
-            st.success("Importacao concluida.")
+            st.success("Importação concluída.")
             st.json(counts)
         except Exception as exc:
-            st.error(f"Falha na importacao: {exc}")
+            st.error(f"Falha na importação: {exc}")
 
 
 def raw_tables(data: dict[str, pd.DataFrame]) -> None:
-    table = st.selectbox("Tabela", TABLES)
+    table = st.selectbox("Tabela", TABLES, format_func=lambda option: TABLE_LABELS.get(option, option))
     st.dataframe(data[table], use_container_width=True, hide_index=True)
 
 
 def diseases_view(data: dict[str, pd.DataFrame]) -> None:
-    st.subheader("Doencas")
+    st.subheader("Doenças")
     diseases = data["doencas"].copy()
     if diseases.empty:
-        st.info("Importe a planilha Excel para preencher o cadastro de doencas.")
+        st.info("Importe a planilha Excel para preencher o cadastro de doenças.")
         return
 
-    search = st.text_input("Buscar por CID, doenca ou descricao")
+    search = st.text_input("Buscar por CID, doença ou descrição")
     if search.strip():
         query = search.strip().casefold()
         searchable = diseases[["cid", "doenca", "descricao"]].fillna("").astype(str)
         mask = searchable.apply(lambda col: col.str.casefold().str.contains(query, regex=False)).any(axis=1)
         diseases = diseases[mask]
 
-    st.dataframe(diseases, use_container_width=True, hide_index=True)
+    st.dataframe(
+        diseases.rename(columns={"cid": "CID", "doenca": "Doença", "descricao": "Descrição"}),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def main() -> None:
-    st.title("Registro Clinico")
+    st.title("Registro Clínico")
     setup_warning()
     data = load_data()
 
     page = st.sidebar.radio(
-        "Navegacao",
+        "Navegação",
         [
             "Dashboard",
             "Pacientes",
-            "Medicos",
-            "Doencas",
-            "Historico clinico",
-            "Historico por paciente",
+            "Médicos",
+            "Doenças",
+            "Histórico clínico",
+            "Histórico por paciente",
             "Importar Excel",
             "IA",
             "Tabelas",
@@ -1071,14 +1109,14 @@ def main() -> None:
         with edit_tab:
             patient_edit_form(data["patients"])
         st.dataframe(data["patients"], use_container_width=True, hide_index=True)
-    elif page == "Medicos":
+    elif page == "Médicos":
         doctor_form()
         st.dataframe(data["doctors"], use_container_width=True, hide_index=True)
-    elif page == "Doencas":
+    elif page == "Doenças":
         diseases_view(data)
-    elif page == "Historico clinico":
+    elif page == "Histórico clínico":
         clinical_forms(data)
-    elif page == "Historico por paciente":
+    elif page == "Histórico por paciente":
         history_view(data)
     elif page == "Importar Excel":
         import_excel_view()
