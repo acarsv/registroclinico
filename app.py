@@ -55,8 +55,7 @@ TABLES = [
     "visits",
     "vaccines",
     "medication_catalog",
-    "exam_groups",
-    "exam_catalog",
+    "exames",
     "cid_codes",
     "doencas",
     "disease_categories",
@@ -69,12 +68,11 @@ TABLE_LABELS = {
     "doctors": "Médicos",
     "conditions": "Condições",
     "medications": "Medicamentos",
-    "exams": "Exames",
+    "exams": "Resultados de exames",
     "visits": "Consultas",
     "vaccines": "Vacinas",
     "medication_catalog": "Catálogo de medicamentos",
-    "exam_groups": "Grupos de exames",
-    "exam_catalog": "Catálogo de exames",
+    "exames": "Exames",
     "cid_codes": "Códigos CID",
     "doencas": "Doenças",
     "disease_categories": "Categorias de doenças",
@@ -145,23 +143,27 @@ DOCTOR_COLUMN_ORDER = [
 ]
 
 EXAM_COLUMN_LABELS = {
-    "name": "Nome do exame",
-    "group_name": "Grupo",
-    "unit": "Unidade",
-    "description": "Descrição",
-    "reference_range": "Valor de referência",
-    "source_position": "Posição",
-    "created_at": "Criado em",
+    "nome": "Nome do exame",
+    "grupo": "Grupo",
+    "unidade": "Unidade",
+    "intervalo_referencia": "Intervalo de referência",
+    "descricao": "Descrição",
+    "ordem": "Ordem",
+    "ativo": "Ativo",
+    "criado_em": "Criado em",
+    "atualizado_em": "Atualizado em",
 }
 
 EXAM_COLUMN_ORDER = [
-    "name",
-    "group_name",
-    "unit",
-    "description",
-    "reference_range",
-    "source_position",
-    "created_at",
+    "nome",
+    "grupo",
+    "unidade",
+    "intervalo_referencia",
+    "descricao",
+    "ordem",
+    "ativo",
+    "criado_em",
+    "atualizado_em",
 ]
 
 
@@ -858,56 +860,46 @@ def display_text(value: Any) -> str:
     return str(value)
 
 
-def exam_group_names(groups: pd.DataFrame) -> dict[str, str]:
-    if groups.empty:
-        return {}
-    return {
-        str(row["id"]): str(row["name"])
-        for _, row in groups.iterrows()
-        if row.get("id") and row.get("name")
-    }
-
-
-def exam_catalog_display_name(exam: pd.Series, groups: pd.DataFrame) -> str:
-    group_name = exam_group_names(groups).get(str(exam.get("group_id") or ""), "")
-    exam_name = display_text(exam.get("name")) or "Exame sem nome"
+def exam_display_name(exam: pd.Series) -> str:
+    exam_name = display_text(exam.get("nome")) or "Exame sem nome"
+    group_name = display_text(exam.get("grupo"))
     if group_name:
         return f"{exam_name} - {group_name}"
     return exam_name
 
 
-def exam_catalog_display_table(exams: pd.DataFrame, groups: pd.DataFrame) -> pd.DataFrame:
+def exam_display_table(exams: pd.DataFrame) -> pd.DataFrame:
     if exams.empty:
         return pd.DataFrame(columns=list(EXAM_COLUMN_LABELS.values()))
     display = exams.copy()
-    display["group_name"] = display["group_id"].astype(str).map(exam_group_names(groups)).fillna("")
     visible_columns = [column for column in EXAM_COLUMN_ORDER if column in display.columns]
     remaining_columns = [
         column
         for column in display.columns
-        if column not in visible_columns and column not in {"id", "group_id"}
+        if column not in visible_columns and column != "id"
     ]
     display = display[visible_columns + remaining_columns].copy()
-    for column in ["created_at"]:
+    for column in ["criado_em", "atualizado_em"]:
         if column in display.columns:
             display[column] = display[column].apply(format_br_date)
+    if "ativo" in display.columns:
+        display["ativo"] = display["ativo"].map({True: "Sim", False: "Não"}).fillna(display["ativo"])
     return display.rename(columns=EXAM_COLUMN_LABELS)
 
 
-def filter_exam_catalog(exams: pd.DataFrame, groups: pd.DataFrame, search: str) -> pd.DataFrame:
+def filter_exams_catalog(exams: pd.DataFrame, search: str) -> pd.DataFrame:
     if exams.empty or not search.strip():
         return exams
     searchable = exams.copy()
-    searchable["group_name"] = searchable["group_id"].astype(str).map(exam_group_names(groups)).fillna("")
     query = search.strip().casefold()
     searchable_columns = [
         column
         for column in [
-            "name",
-            "group_name",
-            "unit",
-            "description",
-            "reference_range",
+            "nome",
+            "grupo",
+            "unidade",
+            "intervalo_referencia",
+            "descricao",
         ]
         if column in searchable.columns
     ]
@@ -916,101 +908,86 @@ def filter_exam_catalog(exams: pd.DataFrame, groups: pd.DataFrame, search: str) 
     return exams[mask]
 
 
-def ensure_exam_group(group_name: str) -> str | None:
-    group_name = group_name.strip()
-    if not group_name:
-        return None
-    client = supabase_client()
-    if client is None:
-        st.error("Configure o Supabase em .streamlit/secrets.toml antes de salvar dados.")
-        return None
-    existing = client.table("exam_groups").select("id").eq("name", group_name).limit(1).execute()
-    if existing.data:
-        return existing.data[0]["id"]
-    created = client.table("exam_groups").insert({"name": group_name}).execute()
-    st.cache_data.clear()
-    return created.data[0]["id"] if created.data else None
-
-
-def exam_catalog_payload(
-    name: str,
-    group_name: str,
-    unit: str,
-    description: str,
-    reference_range: str,
-    source_position_text: str,
+def exam_payload(
+    nome: str,
+    unidade: str,
+    intervalo_referencia: str,
+    descricao: str,
+    grupo: str,
+    ordem_text: str,
+    ativo: bool,
 ) -> dict[str, Any] | None:
-    group_id = ensure_exam_group(group_name)
-    if group_name.strip() and group_id is None:
-        return None
-    source_position = clean_number(source_position_text)
+    ordem = clean_number(ordem_text)
     return {
-        "name": name,
-        "group_id": group_id,
-        "unit": unit,
-        "description": description,
-        "reference_range": reference_range,
-        "source_position": int(source_position) if source_position is not None else None,
+        "nome": nome,
+        "unidade": unidade,
+        "intervalo_referencia": intervalo_referencia,
+        "descricao": descricao,
+        "grupo": grupo,
+        "ordem": int(ordem) if ordem is not None else None,
+        "ativo": ativo,
+        "atualizado_em": datetime.now().isoformat(),
     }
 
 
-def exam_catalog_form(exams: pd.DataFrame, groups: pd.DataFrame, exam: pd.Series | None = None, rerun_after_submit: bool = False) -> None:
+def exam_form(exam: pd.Series | None = None, rerun_after_submit: bool = False) -> None:
     editing = exam is not None
     st.subheader("Editar exame" if editing else "Novo exame")
     key_prefix = f"edit_exam_{exam.get('id')}" if editing else "new_exam"
-    group_name_map = exam_group_names(groups)
-    current_group = group_name_map.get(str(exam.get("group_id") or ""), "") if editing else ""
 
-    name = st.text_input("Nome do exame", value=display_text(exam.get("name")) if editing else "", key=f"{key_prefix}_name")
-    group_name = st.text_input("Grupo", value=current_group, key=f"{key_prefix}_group")
-    unit = st.text_input("Unidade", value=display_text(exam.get("unit")) if editing else "", key=f"{key_prefix}_unit")
-    description = st.text_area("Descrição", value=display_text(exam.get("description")) if editing else "", height=120, key=f"{key_prefix}_description")
-    reference_range = st.text_input("Valor de referência", value=display_text(exam.get("reference_range")) if editing else "", key=f"{key_prefix}_reference_range")
-    source_position_text = st.text_input("Posição", value=display_text(exam.get("source_position")) if editing else "", key=f"{key_prefix}_source_position")
+    nome = st.text_input("Nome do exame", value=display_text(exam.get("nome")) if editing else "", key=f"{key_prefix}_nome")
+    grupo = st.text_input("Grupo", value=display_text(exam.get("grupo")) if editing else "", key=f"{key_prefix}_grupo")
+    unidade = st.text_input("Unidade", value=display_text(exam.get("unidade")) if editing else "", key=f"{key_prefix}_unidade")
+    intervalo_referencia = st.text_area(
+        "Intervalo de referência",
+        value=display_text(exam.get("intervalo_referencia")) if editing else "",
+        height=100,
+        key=f"{key_prefix}_intervalo_referencia",
+    )
+    descricao = st.text_area("Descrição", value=display_text(exam.get("descricao")) if editing else "", height=140, key=f"{key_prefix}_descricao")
+    ordem_text = st.text_input("Ordem", value=display_text(exam.get("ordem")) if editing else "", key=f"{key_prefix}_ordem")
+    current_active = bool(exam.get("ativo")) if editing and not pd.isna(exam.get("ativo")) else True
+    ativo = st.checkbox("Ativo", value=current_active, key=f"{key_prefix}_ativo")
 
     button_label = "Atualizar exame" if editing else "Salvar exame"
     if st.button(button_label, type="primary"):
-        if not name.strip():
+        if not nome.strip():
             st.error("Informe o nome do exame.")
             return
-        payload = exam_catalog_payload(
-            name,
-            group_name,
-            unit,
-            description,
-            reference_range,
-            source_position_text,
-        )
+        if not grupo.strip():
+            st.error("Informe o grupo do exame.")
+            return
+        payload = exam_payload(nome, unidade, intervalo_referencia, descricao, grupo, ordem_text, ativo)
         if payload is None:
             return
-        saved = update_row("exam_catalog", str(exam.get("id")), payload) if editing else insert_row("exam_catalog", payload)
+        saved = update_row("exames", str(exam.get("id")), payload) if editing else insert_row("exames", payload)
         if saved and rerun_after_submit:
             st.rerun()
 
 
 @st.dialog("Novo exame", width="large")
-def exam_new_dialog(exams: pd.DataFrame, groups: pd.DataFrame) -> None:
-    exam_catalog_form(exams, groups, rerun_after_submit=True)
+def exam_new_dialog() -> None:
+    exam_form(rerun_after_submit=True)
 
 
 @st.dialog("Editar exame", width="large")
-def exam_edit_dialog(exams: pd.DataFrame, groups: pd.DataFrame, exam_id: str) -> None:
+def exam_edit_dialog(exams: pd.DataFrame, exam_id: str) -> None:
     exam = exams[exams["id"] == exam_id]
     if exam.empty:
         st.error("Exame selecionado não encontrado.")
         return
-    exam_catalog_form(exams, groups, exam=exam.iloc[0], rerun_after_submit=True)
+    exam_form(exam=exam.iloc[0], rerun_after_submit=True)
 
 
 @st.dialog("Excluir exame")
-def exam_delete_dialog(exams: pd.DataFrame, groups: pd.DataFrame, exam_id: str) -> None:
+def exam_delete_dialog(exams: pd.DataFrame, exam_id: str) -> None:
     exam = exams[exams["id"] == exam_id]
     if exam.empty:
         st.error("Exame selecionado não encontrado.")
         return
-    st.warning(f"Tem certeza que deseja excluir {exam_catalog_display_name(exam.iloc[0], groups)}?")
+    st.warning(f"Tem certeza que deseja excluir {exam_display_name(exam.iloc[0])}?")
     if st.button("Excluir exame", type="primary"):
-        deleted = delete_row("exam_catalog", exam_id, "Exame excluído.")
+        deleted = delete_row("exames", exam_id, "Exame excluído.")
         if deleted:
             st.session_state.pop("selected_exam_id", None)
             st.rerun()
@@ -1018,27 +995,26 @@ def exam_delete_dialog(exams: pd.DataFrame, groups: pd.DataFrame, exam_id: str) 
 
 def exams_view(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Exames")
-    exams = data["exam_catalog"].copy()
-    groups = data["exam_groups"].copy()
+    exams = data["exames"].copy()
 
     action_columns = st.columns([1, 1, 1, 4])
     selected_id = st.session_state.get("selected_exam_id")
     with action_columns[0]:
         if st.button("Novo exame", type="primary", use_container_width=True):
-            exam_new_dialog(exams, groups)
+            exam_new_dialog()
     with action_columns[1]:
         edit_clicked = st.button("Editar", use_container_width=True, disabled=not selected_id)
     with action_columns[2]:
         delete_clicked = st.button("Excluir", use_container_width=True, disabled=not selected_id)
 
-    search = st.text_input("Pesquisar exame", placeholder="Digite nome, grupo, unidade, descrição ou valor de referência")
-    filtered = filter_exam_catalog(exams, groups, search)
-    if not filtered.empty and "name" in filtered.columns:
-        filtered = filtered.sort_values("name")
+    search = st.text_input("Pesquisar exame", placeholder="Digite nome, grupo, unidade, descrição ou intervalo de referência")
+    filtered = filter_exams_catalog(exams, search)
+    if not filtered.empty and "nome" in filtered.columns:
+        filtered = filtered.sort_values("nome")
 
     if filtered.empty:
         st.info("Nenhum exame encontrado.")
-        st.dataframe(exam_catalog_display_table(filtered, groups), use_container_width=True, hide_index=True)
+        st.dataframe(exam_display_table(filtered), use_container_width=True, hide_index=True)
         return
 
     ids = filtered["id"].astype(str).tolist()
@@ -1051,17 +1027,17 @@ def exams_view(data: dict[str, pd.DataFrame]) -> None:
     selected_id = st.radio(
         "Exames",
         ids,
-        format_func=lambda exam_id: exam_catalog_display_name(indexed_exams.loc[exam_id], groups),
+        format_func=lambda exam_id: exam_display_name(indexed_exams.loc[exam_id]),
         key="selected_exam_id",
         label_visibility="collapsed",
     )
 
     if edit_clicked and selected_id:
-        exam_edit_dialog(exams, groups, selected_id)
+        exam_edit_dialog(exams, selected_id)
     if delete_clicked and selected_id:
-        exam_delete_dialog(exams, groups, selected_id)
+        exam_delete_dialog(exams, selected_id)
 
-    st.dataframe(exam_catalog_display_table(filtered, groups), use_container_width=True, hide_index=True)
+    st.dataframe(exam_display_table(filtered), use_container_width=True, hide_index=True)
 
 
 def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
@@ -1451,37 +1427,27 @@ def import_reference_tables(xl: pd.ExcelFile) -> dict[str, int]:
             )
     counts["medication_catalog"] = upsert_rows("medication_catalog", med_rows, "name")
 
-    groups = read_sheet(xl, "GrupoTab")
-    group_rows = [{"name": clean_text(row.get("NomeGrupo"))} for _, row in groups.iterrows() if clean_text(row.get("NomeGrupo"))]
-
     exam_tab = pd.read_excel(xl, sheet_name="ExameTab", header=None) if "ExameTab" in xl.sheet_names else pd.DataFrame()
-    for _, item in exam_tab.iterrows():
-        group_name = clean_text(item.get(4))
-        if group_name:
-            group_rows.append({"name": group_name})
-    group_rows = list({row["name"]: row for row in group_rows}.values())
-    counts["exam_groups"] = upsert_rows("exam_groups", group_rows, "name")
-
-    group_map = fetch_id_map("exam_groups", "name")
     exam_rows = []
     for _, item in exam_tab.iterrows():
         name = clean_text(item.get(0))
         group_name = clean_text(item.get(4))
-        if not name:
+        if not name or name.casefold() == "nomeexame":
             continue
         reference_range = clean_text(item.get(2))
         description = clean_text(item.get(3))
         exam_rows.append(
             {
-                "name": name,
-                "group_id": group_map.get(group_name or ""),
-                "unit": clean_text(item.get(1)),
-                "description": description,
-                "reference_range": reference_range,
-                "source_position": int(clean_number(item.get(5)) or 0) or None,
+                "nome": name,
+                "grupo": (group_name or "").strip(),
+                "unidade": clean_text(item.get(1)),
+                "intervalo_referencia": reference_range,
+                "descricao": description,
+                "ordem": int(clean_number(item.get(5)) or 0) or None,
+                "ativo": True,
             }
         )
-    counts["exam_catalog"] = upsert_rows("exam_catalog", exam_rows, "name,group_id")
+    counts["exames"] = upsert_rows("exames", exam_rows, "nome,grupo")
 
     cid = read_sheet(xl, "CIDTab")
     cid_rows = []
@@ -1648,7 +1614,7 @@ def import_schema_status() -> tuple[bool, str]:
     try:
         client.table("patients").select("id,address,health_plan,preexisting_conditions").limit(1).execute()
         client.table("vaccines").select("id,source_key").limit(1).execute()
-        client.table("exam_catalog").select("id,name").limit(1).execute()
+        client.table("exames").select("id,nome").limit(1).execute()
         client.table("doencas").select("id,cid,doenca,descricao").limit(1).execute()
         client.table("import_batches").select("id,file_name").limit(1).execute()
         return True, "Schema de importação pronto."
