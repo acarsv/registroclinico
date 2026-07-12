@@ -216,6 +216,19 @@ def parse_br_date(value: str, container: Any = st) -> date | None:
     return parsed
 
 
+def br_date_mask(value: str) -> str:
+    digits = re.sub(r"\D", "", value)[:8]
+    if len(digits) <= 2:
+        return digits
+    if len(digits) <= 4:
+        return f"{digits[:2]}/{digits[2:]}"
+    return f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
+
+
+def apply_br_date_mask(key: str) -> None:
+    st.session_state[key] = br_date_mask(str(st.session_state.get(key, "")))
+
+
 def format_br_date(value: Any) -> str:
     if value in ("", None) or pd.isna(value):
         return ""
@@ -330,45 +343,60 @@ def dashboard(data: dict[str, pd.DataFrame]) -> None:
 
 
 def patient_form(rerun_after_submit: bool = False) -> None:
-    with st.form("patient_form", clear_on_submit=True):
-        st.subheader("Novo paciente")
-        full_name = st.text_input("Nome completo")
-        birth_date_text = st.text_input(
-            "Data de nascimento",
-            placeholder="DD/MM/AAAA",
-            help="Digite a data no formato DD/MM/AAAA. Deixe em branco se não souber.",
+    st.subheader("Novo paciente")
+    full_name = st.text_input("Nome completo", key="new_patient_full_name")
+    birth_date_text = st.text_input(
+        "Data de nascimento",
+        key="new_patient_birth_date",
+        placeholder="DD/MM/AAAA",
+        help="Digite apenas os números. As barras serão inseridas automaticamente.",
+        max_chars=10,
+        on_change=apply_br_date_mask,
+        args=("new_patient_birth_date",),
+    )
+    sex_labels = {"Nao informado": "Não informado"}
+    sex = st.selectbox(
+        "Sexo",
+        ["Nao informado", "Feminino", "Masculino", "Outro"],
+        key="new_patient_sex",
+        format_func=lambda option: sex_labels.get(option, option),
+    )
+    phone = st.text_input("Telefone", key="new_patient_phone")
+    email = st.text_input("Email", key="new_patient_email")
+    city = st.text_input("Cidade", key="new_patient_city")
+    notes = st.text_area("Observações", height=140, key="new_patient_notes")
+    if st.button("Salvar paciente", type="primary"):
+        if not full_name.strip():
+            st.error("Informe o nome do paciente.")
+            return
+        birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
+        if birth_date_text.strip() and birth_date is None:
+            return
+        saved = insert_row(
+            "patients",
+            {
+                "full_name": full_name,
+                "birth_date": birth_date,
+                "sex": sex,
+                "phone": phone,
+                "email": email,
+                "city": city,
+                "notes": notes,
+            },
         )
-        sex_labels = {"Nao informado": "Não informado"}
-        sex = st.selectbox(
-            "Sexo",
-            ["Nao informado", "Feminino", "Masculino", "Outro"],
-            format_func=lambda option: sex_labels.get(option, option),
-        )
-        phone = st.text_input("Telefone")
-        email = st.text_input("Email")
-        city = st.text_input("Cidade")
-        notes = st.text_area("Observações", height=140)
-        if st.form_submit_button("Salvar paciente", type="primary"):
-            if not full_name.strip():
-                st.error("Informe o nome do paciente.")
-            else:
-                birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
-                if birth_date_text.strip() and birth_date is None:
-                    return
-                saved = insert_row(
-                    "patients",
-                    {
-                        "full_name": full_name,
-                        "birth_date": birth_date,
-                        "sex": sex,
-                        "phone": phone,
-                        "email": email,
-                        "city": city,
-                        "notes": notes,
-                    },
-                )
-                if saved and rerun_after_submit:
-                    st.rerun()
+        if saved:
+            for key in [
+                "new_patient_full_name",
+                "new_patient_birth_date",
+                "new_patient_sex",
+                "new_patient_phone",
+                "new_patient_email",
+                "new_patient_city",
+                "new_patient_notes",
+            ]:
+                st.session_state.pop(key, None)
+            if rerun_after_submit:
+                st.rerun()
 
 
 def patient_edit_form(patients: pd.DataFrame, patient_id: str | None = None, rerun_after_submit: bool = False) -> None:
