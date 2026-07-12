@@ -198,6 +198,18 @@ def fetch_table(table: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def table_has_column(table: str, column: str) -> bool:
+    client = supabase_client()
+    if client is None:
+        return False
+    try:
+        client.table(table).select(f"id,{column}").limit(1).execute()
+        return True
+    except Exception:
+        return False
+
+
 def insert_row(table: str, payload: dict[str, Any]) -> bool:
     client = supabase_client()
     if client is None:
@@ -669,6 +681,7 @@ def patients_view(patients: pd.DataFrame) -> None:
 
 def doctor_form(rerun_after_submit: bool = False) -> None:
     st.subheader("Novo médico")
+    has_location = table_has_column("doctors", "location")
     full_name = st.text_input("Nome", key="new_doctor_full_name")
     specialty = st.text_input("Especialidade", key="new_doctor_specialty")
     crm = st.text_input("CRM", key="new_doctor_crm")
@@ -682,22 +695,25 @@ def doctor_form(rerun_after_submit: bool = False) -> None:
         args=("new_doctor_phone",),
     )
     email = st.text_input("Email", key="new_doctor_email")
-    location = st.text_input("Local", key="new_doctor_location")
+    location = ""
+    if has_location:
+        location = st.text_input("Local", key="new_doctor_location")
+    else:
+        st.caption("O campo Local será exibido após atualizar a coluna `location` em `doctors` no Supabase.")
     if st.button("Salvar médico", type="primary"):
         if not full_name.strip():
             st.error("Informe o nome do médico.")
             return
-        saved = insert_row(
-            "doctors",
-            {
-                "full_name": full_name,
-                "specialty": specialty,
-                "crm": crm,
-                "phone": phone,
-                "email": email,
-                "location": location,
-            },
-        )
+        payload = {
+            "full_name": full_name,
+            "specialty": specialty,
+            "crm": crm,
+            "phone": phone,
+            "email": email,
+        }
+        if has_location:
+            payload["location"] = location
+        saved = insert_row("doctors", payload)
         if saved:
             for key in [
                 "new_doctor_full_name",
@@ -714,6 +730,7 @@ def doctor_form(rerun_after_submit: bool = False) -> None:
 
 def doctor_edit_form(doctors: pd.DataFrame, doctor_id: str, rerun_after_submit: bool = False) -> None:
     st.subheader("Editar médico")
+    has_location = table_has_column("doctors", "location")
     doctor = doctors[doctors["id"] == doctor_id]
     if doctor.empty:
         st.error("Médico selecionado não encontrado.")
@@ -736,24 +753,26 @@ def doctor_edit_form(doctors: pd.DataFrame, doctor_id: str, rerun_after_submit: 
         args=(phone_key,),
     )
     email = st.text_input("Email", value=str(doctor.get("email") or ""), key=f"{key_prefix}_email")
-    location = st.text_input("Local", value=str(doctor.get("location") or ""), key=f"{key_prefix}_location")
+    location = ""
+    if has_location:
+        location = st.text_input("Local", value=str(doctor.get("location") or ""), key=f"{key_prefix}_location")
+    else:
+        st.caption("O campo Local será exibido após atualizar a coluna `location` em `doctors` no Supabase.")
 
     if st.button("Atualizar médico", type="primary"):
         if not full_name.strip():
             st.error("Informe o nome do médico.")
             return
-        saved = update_row(
-            "doctors",
-            doctor_id,
-            {
-                "full_name": full_name,
-                "specialty": specialty,
-                "crm": crm,
-                "phone": phone,
-                "email": email,
-                "location": location,
-            },
-        )
+        payload = {
+            "full_name": full_name,
+            "specialty": specialty,
+            "crm": crm,
+            "phone": phone,
+            "email": email,
+        }
+        if has_location:
+            payload["location"] = location
+        saved = update_row("doctors", doctor_id, payload)
         if saved and rerun_after_submit:
             st.rerun()
 
@@ -1422,19 +1441,20 @@ def import_patients(xl: pd.ExcelFile) -> int:
 
 def import_doctors(xl: pd.ExcelFile) -> int:
     doctors = read_sheet(xl, "MedicoTab")
+    has_location = table_has_column("doctors", "location")
     rows = []
     for _, item in doctors.iterrows():
         name = clean_text(item.get("Medico"))
         if not name:
             continue
-        rows.append(
-            {
-                "full_name": name,
-                "specialty": clean_text(item.get("Especialidade")),
-                "phone": clean_text(item.get("Telefone")),
-                "location": clean_text(item.get("Local")),
-            }
-        )
+        row = {
+            "full_name": name,
+            "specialty": clean_text(item.get("Especialidade")),
+            "phone": clean_text(item.get("Telefone")),
+        }
+        if has_location:
+            row["location"] = clean_text(item.get("Local"))
+        rows.append(row)
 
     consultas = read_sheet(xl, "ConsultaTab")
     existing = {row["full_name"] for row in rows}
