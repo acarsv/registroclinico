@@ -1469,14 +1469,15 @@ def import_reference_tables(xl: pd.ExcelFile) -> dict[str, int]:
         group_name = clean_text(item.get(4))
         if not name:
             continue
-        description = clean_text(item.get(2))
+        reference_range = clean_text(item.get(2))
+        description = clean_text(item.get(3))
         exam_rows.append(
             {
                 "name": name,
                 "group_id": group_map.get(group_name or ""),
                 "unit": clean_text(item.get(1)),
                 "description": description,
-                "reference_range": description,
+                "reference_range": reference_range,
                 "source_position": int(clean_number(item.get(5)) or 0) or None,
             }
         )
