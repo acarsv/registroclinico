@@ -1008,6 +1008,8 @@ def exam_delete_dialog(exams: pd.DataFrame, exam_id: str) -> None:
 def exams_view(data: dict[str, pd.DataFrame]) -> None:
     st.subheader("Exames")
     exams = data["exames"].copy()
+    if not exams.empty and "nome" in exams.columns:
+        exams = exams[exams["nome"].astype(str).str.casefold() != "nomeexame"].copy()
 
     action_columns = st.columns([1, 1, 1, 4])
     selected_id = st.session_state.get("selected_exam_id")
@@ -1018,6 +1020,12 @@ def exams_view(data: dict[str, pd.DataFrame]) -> None:
         edit_clicked = st.button("Editar", use_container_width=True, disabled=not selected_id)
     with action_columns[2]:
         delete_clicked = st.button("Excluir", use_container_width=True, disabled=not selected_id)
+    with action_columns[3]:
+        if st.button("Atualizar dados", use_container_width=False):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.caption(f"{len(exams)} exames carregados.")
 
     search = st.text_input("Pesquisar exame", placeholder="Digite nome, grupo, unidade, descrição ou intervalo de referência")
     filtered = filter_exams_catalog(exams, search)
@@ -1025,7 +1033,7 @@ def exams_view(data: dict[str, pd.DataFrame]) -> None:
         filtered = filtered.sort_values("nome")
 
     if filtered.empty:
-        st.info("Nenhum exame encontrado.")
+        st.info("Nenhum exame encontrado. Clique em Atualizar dados se a tabela foi populada agora no Supabase.")
         st.dataframe(exam_display_table(filtered), use_container_width=True, hide_index=True)
         return
 
