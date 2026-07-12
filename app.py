@@ -124,6 +124,26 @@ PATIENT_COLUMN_ORDER = [
     "created_at",
 ]
 
+DOCTOR_COLUMN_LABELS = {
+    "full_name": "Nome",
+    "specialty": "Especialidade",
+    "crm": "CRM",
+    "phone": "Telefone",
+    "email": "Email",
+    "location": "Local",
+    "created_at": "Criado em",
+}
+
+DOCTOR_COLUMN_ORDER = [
+    "full_name",
+    "specialty",
+    "crm",
+    "phone",
+    "email",
+    "location",
+    "created_at",
+]
+
 
 def secret(path: str, default: str = "") -> str:
     current: Any = st.secrets
@@ -613,32 +633,203 @@ def patients_view(patients: pd.DataFrame) -> None:
     st.dataframe(patient_display_table(filtered), use_container_width=True, hide_index=True)
 
 
-def doctor_form() -> None:
-    with st.form("doctor_form", clear_on_submit=True):
-        st.subheader("Novo médico")
-        c1, c2, c3 = st.columns(3)
-        full_name = c1.text_input("Nome")
-        specialty = c2.text_input("Especialidade")
-        crm = c3.text_input("CRM")
-        c4, c5, c6 = st.columns(3)
-        phone = c4.text_input("Telefone")
-        email = c5.text_input("Email")
-        location = c6.text_input("Local")
-        if st.form_submit_button("Salvar médico", type="primary"):
-            if not full_name.strip():
-                st.error("Informe o nome do médico.")
-            else:
-                insert_row(
-                    "doctors",
-                    {
-                        "full_name": full_name,
-                        "specialty": specialty,
-                        "crm": crm,
-                        "phone": phone,
-                        "email": email,
-                        "location": location,
-                    },
-                )
+def doctor_form(rerun_after_submit: bool = False) -> None:
+    st.subheader("Novo médico")
+    full_name = st.text_input("Nome", key="new_doctor_full_name")
+    specialty = st.text_input("Especialidade", key="new_doctor_specialty")
+    crm = st.text_input("CRM", key="new_doctor_crm")
+    phone = st.text_input(
+        "Telefone",
+        key="new_doctor_phone",
+        placeholder="(00) 00000-0000",
+        help="Digite apenas os números. A formatação será aplicada ao sair do campo.",
+        max_chars=15,
+        on_change=apply_phone_mask,
+        args=("new_doctor_phone",),
+    )
+    email = st.text_input("Email", key="new_doctor_email")
+    location = st.text_input("Local", key="new_doctor_location")
+    if st.button("Salvar médico", type="primary"):
+        if not full_name.strip():
+            st.error("Informe o nome do médico.")
+            return
+        saved = insert_row(
+            "doctors",
+            {
+                "full_name": full_name,
+                "specialty": specialty,
+                "crm": crm,
+                "phone": phone,
+                "email": email,
+                "location": location,
+            },
+        )
+        if saved:
+            for key in [
+                "new_doctor_full_name",
+                "new_doctor_specialty",
+                "new_doctor_crm",
+                "new_doctor_phone",
+                "new_doctor_email",
+                "new_doctor_location",
+            ]:
+                st.session_state.pop(key, None)
+            if rerun_after_submit:
+                st.rerun()
+
+
+def doctor_edit_form(doctors: pd.DataFrame, doctor_id: str, rerun_after_submit: bool = False) -> None:
+    st.subheader("Editar médico")
+    doctor = doctors[doctors["id"] == doctor_id]
+    if doctor.empty:
+        st.error("Médico selecionado não encontrado.")
+        return
+    doctor = doctor.iloc[0]
+    key_prefix = f"edit_doctor_{doctor_id}"
+    phone_key = f"{key_prefix}_phone"
+
+    full_name = st.text_input("Nome", value=str(doctor.get("full_name") or ""), key=f"{key_prefix}_full_name")
+    specialty = st.text_input("Especialidade", value=str(doctor.get("specialty") or ""), key=f"{key_prefix}_specialty")
+    crm = st.text_input("CRM", value=str(doctor.get("crm") or ""), key=f"{key_prefix}_crm")
+    phone = st.text_input(
+        "Telefone",
+        value=br_phone_mask(str(doctor.get("phone") or "")),
+        key=phone_key,
+        placeholder="(00) 00000-0000",
+        help="Digite apenas os números. A formatação será aplicada ao sair do campo.",
+        max_chars=15,
+        on_change=apply_phone_mask,
+        args=(phone_key,),
+    )
+    email = st.text_input("Email", value=str(doctor.get("email") or ""), key=f"{key_prefix}_email")
+    location = st.text_input("Local", value=str(doctor.get("location") or ""), key=f"{key_prefix}_location")
+
+    if st.button("Atualizar médico", type="primary"):
+        if not full_name.strip():
+            st.error("Informe o nome do médico.")
+            return
+        saved = update_row(
+            "doctors",
+            doctor_id,
+            {
+                "full_name": full_name,
+                "specialty": specialty,
+                "crm": crm,
+                "phone": phone,
+                "email": email,
+                "location": location,
+            },
+        )
+        if saved and rerun_after_submit:
+            st.rerun()
+
+
+def doctor_display_name(doctor: pd.Series) -> str:
+    name = str(doctor.get("full_name") or "Médico sem nome")
+    specialty = str(doctor.get("specialty") or "").strip()
+    if specialty:
+        return f"{name} - {specialty}"
+    return name
+
+
+def doctor_display_table(doctors: pd.DataFrame) -> pd.DataFrame:
+    if doctors.empty:
+        return pd.DataFrame(columns=list(DOCTOR_COLUMN_LABELS.values()))
+    visible_columns = [column for column in DOCTOR_COLUMN_ORDER if column in doctors.columns]
+    remaining_columns = [
+        column
+        for column in doctors.columns
+        if column not in visible_columns and column != "id"
+    ]
+    display = doctors[visible_columns + remaining_columns].copy()
+    if "created_at" in display.columns:
+        display["created_at"] = display["created_at"].apply(format_br_date)
+    if "phone" in display.columns:
+        display["phone"] = display["phone"].apply(br_phone_mask)
+    return display.rename(columns=DOCTOR_COLUMN_LABELS)
+
+
+def filter_doctors(doctors: pd.DataFrame, search: str) -> pd.DataFrame:
+    if doctors.empty or not search.strip():
+        return doctors
+    query = search.strip().casefold()
+    searchable_columns = [
+        column
+        for column in ["full_name", "specialty", "crm", "phone", "email", "location"]
+        if column in doctors.columns
+    ]
+    searchable = doctors[searchable_columns].fillna("").astype(str)
+    mask = searchable.apply(lambda column: column.str.casefold().str.contains(query, regex=False)).any(axis=1)
+    return doctors[mask]
+
+
+@st.dialog("Novo médico", width="large")
+def doctor_new_dialog() -> None:
+    doctor_form(rerun_after_submit=True)
+
+
+@st.dialog("Editar médico", width="large")
+def doctor_edit_dialog(doctors: pd.DataFrame, doctor_id: str) -> None:
+    doctor_edit_form(doctors, doctor_id=doctor_id, rerun_after_submit=True)
+
+
+@st.dialog("Excluir médico")
+def doctor_delete_dialog(doctors: pd.DataFrame, doctor_id: str) -> None:
+    doctor = doctors[doctors["id"] == doctor_id]
+    if doctor.empty:
+        st.error("Médico selecionado não encontrado.")
+        return
+    doctor_name = str(doctor.iloc[0].get("full_name") or "médico selecionado")
+    st.warning(f"Tem certeza que deseja excluir {doctor_name}? As consultas vinculadas ficarão sem médico associado.")
+    if st.button("Excluir médico", type="primary"):
+        deleted = delete_row("doctors", doctor_id, "Médico excluído.")
+        if deleted:
+            st.session_state.pop("selected_doctor_id", None)
+            st.rerun()
+
+
+def doctors_view(doctors: pd.DataFrame) -> None:
+    st.subheader("Médicos")
+
+    action_columns = st.columns([1, 1, 1, 4])
+    selected_id = st.session_state.get("selected_doctor_id")
+    with action_columns[0]:
+        if st.button("Novo médico", type="primary", use_container_width=True):
+            doctor_new_dialog()
+    with action_columns[1]:
+        edit_clicked = st.button("Editar", use_container_width=True, disabled=not selected_id)
+    with action_columns[2]:
+        delete_clicked = st.button("Excluir", use_container_width=True, disabled=not selected_id)
+
+    search = st.text_input("Pesquisar médico", placeholder="Digite nome, especialidade, CRM, telefone, email ou local")
+    filtered = filter_doctors(doctors, search).sort_values("full_name") if not doctors.empty else doctors
+
+    if filtered.empty:
+        st.info("Nenhum médico encontrado.")
+        st.dataframe(doctor_display_table(filtered), use_container_width=True, hide_index=True)
+        return
+
+    ids = filtered["id"].astype(str).tolist()
+    if st.session_state.get("selected_doctor_id") not in ids:
+        st.session_state["selected_doctor_id"] = ids[0]
+
+    indexed_doctors = filtered.set_index("id", drop=False)
+
+    st.markdown("**Nomes dos médicos**")
+    selected_id = st.radio(
+        "Médicos",
+        ids,
+        format_func=lambda doctor_id: doctor_display_name(indexed_doctors.loc[doctor_id]),
+        key="selected_doctor_id",
+        label_visibility="collapsed",
+    )
+
+    if edit_clicked and selected_id:
+        doctor_edit_dialog(doctors, selected_id)
+    if delete_clicked and selected_id:
+        doctor_delete_dialog(doctors, selected_id)
+
+    st.dataframe(doctor_display_table(filtered), use_container_width=True, hide_index=True)
 
 
 def clinical_forms(data: dict[str, pd.DataFrame]) -> None:
@@ -1351,8 +1542,7 @@ def main() -> None:
     elif page == "Pacientes":
         patients_view(data["patients"])
     elif page == "Médicos":
-        doctor_form()
-        st.dataframe(data["doctors"], use_container_width=True, hide_index=True)
+        doctors_view(data["doctors"])
     elif page == "Doenças":
         diseases_view(data)
     elif page == "Histórico clínico":
