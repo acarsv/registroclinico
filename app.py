@@ -332,24 +332,29 @@ def dashboard(data: dict[str, pd.DataFrame]) -> None:
 def patient_form(rerun_after_submit: bool = False) -> None:
     with st.form("patient_form", clear_on_submit=True):
         st.subheader("Novo paciente")
-        c1, c2, c3 = st.columns(3)
-        full_name = c1.text_input("Nome completo")
-        birth_date = birth_date_input(c2)
+        full_name = st.text_input("Nome completo")
+        birth_date_text = st.text_input(
+            "Data de nascimento",
+            placeholder="DD/MM/AAAA",
+            help="Digite a data no formato DD/MM/AAAA. Deixe em branco se não souber.",
+        )
         sex_labels = {"Nao informado": "Não informado"}
-        sex = c3.selectbox(
+        sex = st.selectbox(
             "Sexo",
             ["Nao informado", "Feminino", "Masculino", "Outro"],
             format_func=lambda option: sex_labels.get(option, option),
         )
-        c4, c5, c6 = st.columns(3)
-        phone = c4.text_input("Telefone")
-        email = c5.text_input("Email")
-        city = c6.text_input("Cidade")
-        notes = st.text_area("Observações")
+        phone = st.text_input("Telefone")
+        email = st.text_input("Email")
+        city = st.text_input("Cidade")
+        notes = st.text_area("Observações", height=140)
         if st.form_submit_button("Salvar paciente", type="primary"):
             if not full_name.strip():
                 st.error("Informe o nome do paciente.")
             else:
+                birth_date = parse_br_date(birth_date_text) if birth_date_text.strip() else None
+                if birth_date_text.strip() and birth_date is None:
+                    return
                 saved = insert_row(
                     "patients",
                     {
@@ -470,12 +475,12 @@ def filter_patients(patients: pd.DataFrame, search: str) -> pd.DataFrame:
     return patients[mask]
 
 
-@st.dialog("Novo paciente")
+@st.dialog("Novo paciente", width="large")
 def patient_new_dialog() -> None:
     patient_form(rerun_after_submit=True)
 
 
-@st.dialog("Editar paciente")
+@st.dialog("Editar paciente", width="large")
 def patient_edit_dialog(patients: pd.DataFrame, patient_id: str) -> None:
     patient_edit_form(patients, patient_id=patient_id, rerun_after_submit=True)
 
